@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#237654">
+<title>ЯХУ — я худею</title>
+
+<!-- PWA: делает возможной установку на главный экран iPhone/Android через браузер -->
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ЯХУ">
+<meta name="mobile-web-app-capable" content="yes">
+
+<style>
+  :root {
+    --ink:#19372e; --muted:#6d7b75; --mint:#e0f1e6; --accent:#237654; --accent-dark:#175a3f;
+    --soft:#f7f8f5; --orange:#ec8b58; --card:#ffffff; --danger:#c0503a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; height: 100%; }
+  body {
+    margin:0; background:#dde5df; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink);
+    /* Safari на iPhone растягивает "резиновую" прокрутку всей страницы при
+       свайпе — из-за этого может мелькать белый фон под фиксированной нижней
+       навигацией. overscroll-behavior запрещает такому "перетягиванию" уйти
+       дальше самой страницы. */
+    overscroll-behavior-y: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea {
+    font-family: inherit;
+    /* iOS иначе рисует кнопки/поля своим нативным скруглённым видом поверх наших стилей. */
+    -webkit-appearance: none; appearance: none;
+  }
+  button { touch-action: manipulation; } /* убирает у Safari ~300мс задержку перед реакцией на тап */
+  .phone {
+    width:100%; max-width:460px; margin:0 auto; background:var(--soft); position:relative;
+    padding:env(safe-area-inset-top,20px) 20px calc(90px + env(safe-area-inset-bottom,0px));
+    min-height:100vh; /* фолбэк для браузеров без поддержки dvh */
+    min-height:100dvh; /* учитывает реальную видимую высоту, а не высоту "за" адресной строкой Safari */
+    /* display:flow-root создаёт новый блочный форматирующий контекст: без
+       него верхний margin первого дочернего элемента экрана "схлопывается"
+       с .phone и вылезает НАД ним (виден как полоса фона body сверху) —
+       заметно на экране профиля и в любом месте, где env(safe-area-inset-top)
+       равен 0 (браузеры без поддержки, альбомная ориентация, ненадрезанные
+       экраны), поэтому padding-top тоже становится 0 и не блокирует схлопывание. */
+    display: flow-root;
+  }
+  h1,h2,h3 { margin:0; }
+  .screen { display:none; animation: fade .2s ease; }
+  .screen.active { display:block; }
+  @keyframes fade { from { opacity:0; transform:translateY(4px);} to {opacity:1; transform:none;} }
+
+  /* Header: общая шапка каждого раздела — бренд слева, кнопка профиля справа */
+  .screen-header { display:flex; justify-content:space-between; align-items:center; gap:14px; }
+  .screen-header .brand { margin:18px 0; }
+  .brand { font-size:12px; font-weight:800; letter-spacing:1.6px; color:var(--accent); margin:18px 0 8px; }
+  .motivation-block { margin-bottom:4px; }
+  .motivation-text { margin:0; font-size:19px; line-height:1.4; font-weight:700; color:var(--ink); }
+  .avatar { height:42px; width:42px; border-radius:50%; background:#bfd8c7 center/cover no-repeat; display:grid; place-items:center; font-size:19px; flex-shrink:0; border:0; cursor:pointer; padding:0; }
+
+  /* Профиль */
+  .profile-header { display:flex; align-items:center; gap:12px; margin:18px 0 22px; }
+  .back-btn { border:0; background:#fff; box-shadow:0 3px 10px #17372d10; width:36px; height:36px; border-radius:50%; font-size:17px; color:var(--ink); cursor:pointer; flex-shrink:0; }
+  .profile-photo-block { display:flex; flex-direction:column; align-items:center; margin-bottom:24px; }
+  .profile-photo { height:104px; width:104px; border-radius:50%; background:#bfd8c7 center/cover no-repeat; display:grid; place-items:center; font-size:44px; margin-bottom:14px; box-shadow:0 6px 18px #17372d14; }
+  .profile-photo-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  .photo-upload-btn { background:var(--accent); color:#fff; font-size:13px; font-weight:700; padding:10px 16px; border-radius:12px; cursor:pointer; }
+  .photo-remove-btn { border:0; background:#f3e6e2; color:var(--danger); font-size:13px; font-weight:700; padding:10px 16px; border-radius:12px; cursor:pointer; }
+  .profile-form { display:flex; flex-direction:column; }
+  .profile-form label { display:block; margin:14px 0 6px; font-size:12px; font-weight:700; color:var(--ink); }
+  .profile-form input { width:100%; border:1px solid #d9e2dc; border-radius:12px; padding:12px; font:inherit; font-size:16px; color:var(--ink); background:#fff; }
+  .profile-row-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .gender-toggle { display:flex; gap:8px; }
+  .gender-btn { flex:1; border:1px solid #d9e2dc; background:#fff; color:var(--muted); font-size:13px; font-weight:700; padding:11px; border-radius:12px; cursor:pointer; }
+  .gender-btn.active { background:var(--mint); border-color:var(--accent); color:var(--accent-dark); }
+  .profile-save-btn { margin-top:22px; width:100%; padding:14px; font-size:15px; border-radius:14px; }
+  .profile-form input[readonly] { background:#f3f5f2; color:var(--muted); }
+
+  .reminder { border-radius:20px; background:#fff; padding:15px; display:flex; gap:12px; align-items:center; }
+  .reminder .bell { font-size:20px; background:#fff4dc; border-radius:12px; padding:9px; align-self:flex-start; }
+  .reminder b { font-size:13px; }
+  .reminder p { margin:3px 0 8px; color:var(--muted); font-size:12px; }
+  .interval-stepper { display:flex; align-items:center; gap:10px; }
+  .interval-stepper button { width:26px; height:26px; border-radius:50%; border:1px solid #d9e2dc; background:#f7f8f5; color:var(--ink); font-size:15px; font-weight:700; cursor:pointer; line-height:1; padding:0; }
+  .interval-stepper span { font-size:12px; color:var(--muted); min-width:88px; text-align:center; }
+
+  /* Goal card */
+  .goal { margin-top:22px; padding:18px; border-radius:22px; background:var(--mint); position:relative; overflow:hidden; }
+  .goal h2 { font-size:15px; margin-bottom:10px; }
+  .goal .nums { display:flex; gap:9px; align-items:baseline; }
+  .goal strong { font-size:30px; }
+  .goal small { color:var(--muted); font-size:13px; }
+  .bar { height:8px; border-radius:20px; background:#bfdec9; margin:14px 0 7px; overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:inherit; background:var(--accent); transition:width .4s ease; }
+  .goal footer { font-size:12px; color:#48715c; }
+
+  .section { display:flex; justify-content:space-between; align-items:center; margin:24px 2px 12px; }
+  .section h2 { font-size:17px; }
+  .link { border:0; background:none; color:var(--accent); font-weight:700; font-size:13px; padding:4px; }
+
+  .period-toggle { display:flex; background:#eef0ed; border-radius:12px; padding:3px; gap:2px; }
+  .period-btn { border:0; background:none; color:var(--muted); font-size:12px; font-weight:700; padding:6px 12px; border-radius:9px; cursor:pointer; transition:.15s; }
+  .period-btn.active { background:#fff; color:var(--accent); box-shadow:0 2px 6px #17372d14; }
+
+  .period-nav { display:flex; align-items:center; justify-content:center; gap:14px; margin:10px 0 8px; }
+  .period-nav button { border:0; background:#fff; box-shadow:0 3px 8px #17372d10; width:30px; height:30px; border-radius:50%; font-size:16px; color:var(--ink); cursor:pointer; }
+  .period-nav button:disabled { opacity:.3; cursor:default; box-shadow:none; }
+  .period-nav span { font-size:12px; font-weight:700; color:var(--muted); min-width:130px; text-align:center; text-transform:capitalize; }
+
+  /* Calories card */
+  .calories { background:var(--card); border-radius:22px; padding:18px; box-shadow:0 5px 20px #17372d0a; transition:box-shadow .3s ease, background .3s ease; }
+  .calories.over-budget { background:#fdf1ee; box-shadow:0 0 0 2px var(--danger), 0 8px 26px #c0503a33; animation: pulse-red 1.8s ease-in-out infinite; }
+  @keyframes pulse-red { 0%,100% { box-shadow:0 0 0 2px var(--danger), 0 8px 26px #c0503a33; } 50% { box-shadow:0 0 0 4px var(--danger), 0 10px 32px #c0503a55; } }
+  .cal-top { display:flex; align-items:center; gap:17px; }
+  .ring { height:72px; width:72px; border-radius:50%; flex-shrink:0; display:grid; place-items:center; background:conic-gradient(var(--accent) 0 0%, #e4eee8 0%); transition:background .4s ease; }
+  .ring span { height:58px; width:58px; border-radius:50%; background:#fff; display:grid; place-items:center; text-align:center; font-weight:800; font-size:14px; line-height:1.05; }
+  .ring small { font-weight:500; font-size:9px; color:var(--muted); }
+  .cal-top h3 { font-size:15px; margin-bottom:4px; }
+  .cal-top p { margin:0; color:var(--muted); font-size:13px; }
+
+  .over-budget-banner { display:none; gap:12px; align-items:center; background:#fdf1ee; border:1.5px solid var(--danger); border-radius:18px; padding:13px 15px; margin-bottom:14px; }
+  .over-budget-banner .ico { font-size:20px; }
+  .over-budget-banner b { color:var(--danger); font-size:14px; }
+  .over-budget-banner p { margin:3px 0 0; color:#8a4636; font-size:12px; }
+
+  .macros { margin-top:16px; display:flex; flex-direction:column; gap:11px; }
+  .macro-row { display:grid; grid-template-columns:64px 1fr 68px; align-items:center; gap:10px; }
+  .macro-label { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .macro-label .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .macro-track { height:7px; border-radius:20px; background:#eef0ed; overflow:hidden; }
+  .macro-fill { height:100%; border-radius:inherit; transition:width .4s ease, background .3s ease; }
+  .macro-val { font-size:11px; color:var(--muted); text-align:right; white-space:nowrap; }
+
+  .actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .action { border:0; text-align:left; border-radius:18px; padding:15px; background:#fff; color:var(--ink); box-shadow:0 5px 18px #17372d08; font-size:13px; font-weight:700; cursor:pointer; }
+  .action .ico { font-size:20px; display:block; margin-bottom:7px; }
+  .action:first-child { background:#fff4ec; }
+  .action:nth-child(2) { background:#edf5ff; }
+  .action.water-action { grid-column:1 / -1; display:flex; align-items:center; gap:10px; background:#e6f7fb; }
+  .action.water-action .ico { margin-bottom:0; font-size:22px; }
+  .action.water-action small { font-weight:600; color:var(--muted); margin-left:auto; }
+
+  .water-card { background:#eaf7fb; border-radius:22px; padding:16px 18px; margin-top:16px; }
+
+  /* Подсказка на главном экране: один из макросов уже набран, предлагаем чем добрать остальные */
+  .macro-tip { background:#f4eefb; border-radius:20px; padding:14px 16px; margin-top:16px; }
+  .macro-tip-head { font-size:13px; line-height:1.45; color:var(--ink); }
+  .macro-tip-head b { color:#6a3fc4; }
+  .macro-tip-chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .macro-chip { border:0; background:#fff; color:var(--ink); font-size:12px; font-weight:600; padding:8px 12px; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px #17372d14; }
+  .macro-chip:active { transform:scale(.97); }
+  .water-top { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+  .water-ico { font-size:26px; flex-shrink:0; }
+  .water-top h3 { font-size:16px; margin:0 0 3px; color:#0f5d73; }
+  .water-top p { margin:0; font-size:12px; color:#3a7f92; }
+
+  .toggle { margin-left:auto; width:40px; height:23px; border-radius:20px; background:#d3ddd7; padding:3px; cursor:pointer; transition:.2s; flex-shrink:0; }
+  .toggle.on { background:var(--accent); }
+  .toggle i { display:block; background:#fff; border-radius:50%; width:17px; height:17px; transition:.2s; }
+  .toggle.on i { margin-left:auto; }
+  .hint { font-size:12px; color:var(--muted); margin-top:10px; line-height:1.4; }
+
+  /* Diary */
+  .diary-day { margin-bottom:18px; }
+  .diary-day-head { display:flex; justify-content:space-between; align-items:baseline; margin:0 2px 8px; }
+  .diary-day-head h3 { font-size:14px; font-weight:800; color:var(--ink); text-transform:capitalize; }
+  .diary-day-head span { font-size:12px; font-weight:700; color:var(--muted); }
+  .food-row { display:flex; align-items:center; gap:12px; background:var(--card); border-radius:16px; padding:13px 15px; margin-bottom:9px; }
+  .food-row .fname { font-weight:700; font-size:14px; }
+  .food-row .fdate { font-size:12px; color:var(--muted); margin-top:2px; }
+  .food-row .fcal { font-weight:800; font-size:14px; white-space:nowrap; }
+  .food-row .fdel { border:0; background:none; color:var(--danger); font-size:18px; padding:4px 6px; cursor:pointer; }
+  .food-row .fedit { border:0; background:none; color:var(--muted); font-size:16px; padding:4px 6px; cursor:pointer; }
+  .empty { text-align:center; padding:50px 20px; color:var(--muted); }
+  .empty .ico { font-size:34px; margin-bottom:10px; display:block; }
+
+  /* Progress / charts */
+  .chartcard { background:var(--card); border-radius:18px; padding:16px 14px 10px; box-shadow:0 5px 18px #17372d08; }
+  .bars { display:flex; align-items:flex-end; gap:7px; height:150px; }
+  .bars .col { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; }
+  .bars .val { font-size:10px; color:var(--muted); margin-bottom:5px; }
+  /* ease-out: быстрый старт, плавное замедление в конце — плюс transition-delay
+     по индексу столбика создаёт эффект заполнения слева направо */
+  .bars .stick { width:100%; border-radius:5px; min-height:6px; transition: height .55s cubic-bezier(0.16, 1, 0.3, 1); }
+  .bars .lbl { font-size:10px; color:var(--muted); margin-top:6px; }
+
+  .macro-summary { background:var(--card); border-radius:16px; padding:14px 16px; margin-top:10px; box-shadow:0 5px 18px #17372d08; }
+  .macro-summary-head { font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.4px; margin-bottom:10px; }
+  .macro-summary-head span { text-transform:none; letter-spacing:normal; font-weight:500; }
+  .macro-summary-row { display:flex; justify-content:space-between; gap:8px; }
+  .macro-summary-item { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; font-size:11px; color:var(--muted); }
+  .macro-summary-item .dot { width:8px; height:8px; border-radius:50%; }
+  .macro-summary-item b { font-size:15px; color:var(--ink); }
+
+  /* Achievements */
+  .main-goal-card { border-radius:22px; padding:22px 18px; text-align:center; background:linear-gradient(135deg,#fdeec2,#f8d48a); margin-bottom:4px; transition:background .3s ease; }
+  .main-goal-card.locked { background:#eef0ed; }
+  .main-goal-card .mg-icon { font-size:36px; margin-bottom:8px; }
+  .main-goal-card h3 { font-size:18px; margin-bottom:5px; color:#6d5217; }
+  .main-goal-card.locked h3 { color:var(--ink); }
+  .main-goal-card p { margin:0; font-size:12.5px; color:#8a6a24; line-height:1.4; }
+  .main-goal-card.locked p { color:var(--muted); }
+
+  .quest-row { display:flex; align-items:center; gap:14px; background:var(--card); border-radius:16px; padding:13px 15px; margin-bottom:9px; }
+  .quest-icon { height:38px; width:38px; border-radius:50%; display:grid; place-items:center; font-size:17px; flex-shrink:0; }
+  .quest-title { font-weight:700; font-size:14px; }
+  .quest-detail { font-size:12px; color:var(--muted); margin-top:2px; }
+  .quest-status { margin-left:auto; text-align:right; flex-shrink:0; display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+  .quest-count { font-size:11px; font-weight:800; color:var(--accent-dark); background:var(--mint); border-radius:10px; padding:2px 8px; white-space:nowrap; }
+  .quest-check { font-size:16px; }
+
+  .ach-row { display:flex; gap:14px; align-items:center; background:var(--card); border-radius:16px; padding:13px 15px; margin-bottom:9px; }
+  .ach-icon { height:38px; width:38px; border-radius:50%; display:grid; place-items:center; font-size:17px; flex-shrink:0; }
+  .ach-title { font-weight:700; font-size:14px; }
+  .ach-detail { font-size:12px; color:var(--muted); margin-top:2px; }
+  .ach-check { margin-left:auto; font-size:16px; }
+
+  /* Nav */
+  .nav { position:fixed; bottom:0; left:0; right:0; height:calc(72px + env(safe-area-inset-bottom,0px)); padding-bottom:env(safe-area-inset-bottom,0px); background:#fff; display:flex; justify-content:space-around; align-items:center; border-top:1px solid #eef0ed; max-width:460px; margin:0 auto; }
+  .nav button { border:0; background:none; color:#9ba8a1; font-size:10px; display:flex; flex-direction:column; gap:3px; align-items:center; cursor:pointer; padding:6px 10px; }
+  .nav button b { font-size:19px; font-weight:500; }
+  .nav button.active { color:var(--accent); font-weight:800; }
+
+  .toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--ink); color:#fff; padding:11px 18px; border-radius:14px; font-size:13px; opacity:0; transition:.25s; white-space:nowrap; z-index:50; max-width:90vw; overflow:hidden; text-overflow:ellipsis; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* Dialog */
+  dialog { border:0; border-radius:24px; padding:0; width:min(calc(100% - 32px),420px); box-shadow:0 16px 45px #19372e40; }
+  dialog::backdrop { background:#19372e77; }
+
+  /* Окно напоминания — крупнее и заметнее обычных диалогов, чтобы точно не пропустить */
+  .reminder-modal { text-align:center; padding:30px 26px 24px; }
+  .reminder-modal-icon { font-size:46px; margin-bottom:12px; animation: reminder-pop .45s cubic-bezier(.34,1.56,.64,1); }
+  .reminder-modal h2 { font-size:19px; margin-bottom:8px; }
+  .reminder-modal p { color:var(--muted); font-size:13px; line-height:1.4; margin-bottom:2px; }
+  @keyframes reminder-pop { 0% { transform:scale(.4); opacity:0; } 100% { transform:scale(1); opacity:1; } }
+  .modal { padding:20px; }
+  .modal h2 { font-size:20px; margin-bottom:5px; }
+  .modal p { margin:0 0 16px; color:var(--muted); font-size:13px; }
+  .modal label { display:block; margin:12px 0 6px; font-size:12px; font-weight:700; }
+  .modal input { width:100%; border:1px solid #d9e2dc; border-radius:12px; padding:12px; font:inherit; font-size:16px; color:var(--ink); }
+  .portion-row { display:grid; grid-template-columns:1fr 100px; gap:10px; }
+  .estimate { margin-top:14px; padding:14px; border-radius:15px; background:var(--mint); }
+  .estimate small { color:#48715c; font-size:11px; }
+  .estimate strong { display:block; font-size:23px; margin:3px 0; }
+  .estimate p { margin:0; color:#48715c; font-size:11px; }
+  .search-results { margin-top:9px; display:grid; gap:6px; max-height:160px; overflow-y:auto; }
+  .search-result { border:1px solid #d9e2dc; border-radius:11px; padding:9px; background:#fff; color:var(--ink); text-align:left; font:inherit; font-size:12px; cursor:pointer; }
+  .search-result.selected { border-color:var(--accent); background:var(--mint); }
+  .search-result b { display:block; font-size:12px; }
+  .search-result small { color:var(--muted); }
+  .source-note { margin:12px 0 0 !important; font-size:11px !important; line-height:1.35; }
+  .source-note a { color:var(--accent); }
+  .modal-actions { display:flex; gap:9px; margin-top:16px; }
+  .modal button { border:0; border-radius:13px; padding:12px 15px; font:inherit; font-size:14px; font-weight:700; cursor:pointer; }
+  .cancel { background:#edf1ed; color:var(--ink); }
+  .save { background:var(--accent); color:#fff; flex:1; }
+  .save:disabled { background:#aabbb2; cursor:default; }
+</style>
+</head>
+<body>
+<main class="phone">
+
+  <!-- ГЛАВНАЯ -->
+  <section class="screen active" id="screen-home">
+    <div class="screen-header">
+      <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+      <button class="avatar" data-profile-btn onclick="showScreen('profile')" aria-label="Профиль">🌿</button>
+    </div>
+    <div class="motivation-block"><p class="motivation-text" id="motivationalPhrase">Загрузка…</p></div>
+    <section class="goal">
+      <h2>Цель на год</h2>
+      <div class="nums"><strong id="goalNums">—</strong><small id="goalSub"></small></div>
+      <div class="bar"><i id="goalBar" style="width:0%"></i></div>
+      <footer id="goalFooter"></footer>
+    </section>
+    <div class="section"><h2>Сегодня</h2></div>
+    <div id="overBudgetBanner" class="over-budget-banner">
+      <span class="ico">⚠️</span>
+      <div><b>Вы сегодня переели!</b><p>Дневная норма калорий превышена — завтра будет новый день.</p></div>
+    </div>
+    <section class="calories" id="caloriesCard">
+      <div class="cal-top">
+        <div class="ring" id="calRing"><span id="calRingText">0<small>ккал</small></span></div>
+        <div><h3 id="calTitle">Ещё 1800 ккал</h3><p id="calSub">из мягкой цели 1800 ккал</p></div>
+      </div>
+      <div class="macros">
+        <div class="macro-row">
+          <div class="macro-label"><span class="dot" style="background:#4f8ef7"></span>Белки</div>
+          <div class="macro-track"><div class="macro-fill" id="proteinBar" data-tint="#4f8ef7" style="width:0%"></div></div>
+          <div class="macro-val" id="proteinVal">0 / 90 г</div>
+        </div>
+        <div class="macro-row">
+          <div class="macro-label"><span class="dot" style="background:#f7b84f"></span>Жиры</div>
+          <div class="macro-track"><div class="macro-fill" id="fatBar" data-tint="#f7b84f" style="width:0%"></div></div>
+          <div class="macro-val" id="fatVal">0 / 60 г</div>
+        </div>
+        <div class="macro-row">
+          <div class="macro-label"><span class="dot" style="background:#9b6bf2"></span>Углеводы</div>
+          <div class="macro-track"><div class="macro-fill" id="carbsBar" data-tint="#9b6bf2" style="width:0%"></div></div>
+          <div class="macro-val" id="carbsVal">0 / 220 г</div>
+        </div>
+      </div>
+    </section>
+
+    <div id="macroTipCard"></div>
+
+    <section class="water-card">
+      <div class="water-top">
+        <div class="water-ico">💧</div>
+        <div style="flex:1">
+          <h3 id="waterRemainingText">Осталось выпить 2500 мл</h3>
+          <p id="waterSub">Выпито 0 из 2500 мл</p>
+        </div>
+      </div>
+      <div class="macro-track" style="height:9px"><div class="macro-fill" id="waterBar" style="width:0%;background:#2ea6c9"></div></div>
+    </section>
+
+    <div class="section"><h2>Быстрые действия</h2></div>
+    <div class="actions">
+      <button class="action" onclick="openFoodForm()"><span class="ico">🍽️</span>Записать еду</button>
+      <button class="action" onclick="openWeightForm()"><span class="ico">⚖️</span>Записать вес</button>
+      <button class="action water-action" onclick="addWaterQuick()"><span class="ico">💧</span>Стакан воды <small>+250 мл</small></button>
+    </div>
+  </section>
+
+  <!-- ДНЕВНИК -->
+  <section class="screen" id="screen-diary">
+    <div class="screen-header">
+      <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+      <button class="avatar" data-profile-btn onclick="showScreen('profile')" aria-label="Профиль">🌿</button>
+    </div>
+    <div class="section" style="margin-top:8px"><h2 style="font-size:22px">Дневник питания</h2></div>
+    <div id="foodList"></div>
+  </section>
+
+  <!-- ПРОГРЕСС -->
+  <section class="screen" id="screen-progress">
+    <div class="screen-header">
+      <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+      <button class="avatar" data-profile-btn onclick="showScreen('profile')" aria-label="Профиль">🌿</button>
+    </div>
+    <div class="section" style="margin-top:8px"><h2 style="font-size:22px">Прогресс</h2></div>
+
+    <div class="section">
+      <h2>Вес</h2>
+      <div class="period-toggle">
+        <button class="period-btn active" data-chart="weight" data-period="week" onclick="setPeriod('weight','week')">Неделя</button>
+        <button class="period-btn" data-chart="weight" data-period="month" onclick="setPeriod('weight','month')">Месяц</button>
+      </div>
+    </div>
+    <div class="period-nav">
+      <button id="weightPrevBtn" onclick="shiftPeriod('weight',-1)" aria-label="Раньше">‹</button>
+      <span id="weightPeriodLabel">—</span>
+      <button id="weightNextBtn" onclick="shiftPeriod('weight',1)" aria-label="Позже">›</button>
+    </div>
+    <div id="weightChart"></div>
+
+    <div class="section">
+      <h2>Калории</h2>
+      <div class="period-toggle">
+        <button class="period-btn active" data-chart="calories" data-period="week" onclick="setPeriod('calories','week')">Неделя</button>
+        <button class="period-btn" data-chart="calories" data-period="month" onclick="setPeriod('calories','month')">Месяц</button>
+      </div>
+    </div>
+    <div class="period-nav">
+      <button id="caloriesPrevBtn" onclick="shiftPeriod('calories',-1)" aria-label="Раньше">‹</button>
+      <span id="caloriesPeriodLabel">—</span>
+      <button id="caloriesNextBtn" onclick="shiftPeriod('calories',1)" aria-label="Позже">›</button>
+    </div>
+    <div id="calChart"></div>
+    <div class="macro-summary">
+      <div class="macro-summary-head">Б/Ж/У <span id="calSummaryLabel">за неделю</span></div>
+      <div class="macro-summary-row">
+        <div class="macro-summary-item"><span class="dot" style="background:#4f8ef7"></span>Белки<b id="calSummaryProtein">0 г</b></div>
+        <div class="macro-summary-item"><span class="dot" style="background:#f7b84f"></span>Жиры<b id="calSummaryFat">0 г</b></div>
+        <div class="macro-summary-item"><span class="dot" style="background:#9b6bf2"></span>Углеводы<b id="calSummaryCarbs">0 г</b></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Вода</h2>
+      <div class="period-toggle">
+        <button class="period-btn active" data-chart="water" data-period="week" onclick="setPeriod('water','week')">Неделя</button>
+        <button class="period-btn" data-chart="water" data-period="month" onclick="setPeriod('water','month')">Месяц</button>
+      </div>
+    </div>
+    <div class="period-nav">
+      <button id="waterPrevBtn" onclick="shiftPeriod('water',-1)" aria-label="Раньше">‹</button>
+      <span id="waterPeriodLabel">—</span>
+      <button id="waterNextBtn" onclick="shiftPeriod('water',1)" aria-label="Позже">›</button>
+    </div>
+    <div id="waterProgressChart"></div>
+
+    <p class="hint">Неделя считается с понедельника по воскресенье, месяц — с 1-го по последнее число. Стрелками можно пролистать всю историю — от сегодняшнего дня до первой записи. За месяц данные показаны по 7-дневным блокам, чтобы график оставался читаемым.</p>
+  </section>
+
+  <!-- НАГРАДЫ -->
+  <section class="screen" id="screen-achievements">
+    <div class="screen-header">
+      <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+      <button class="avatar" data-profile-btn onclick="showScreen('profile')" aria-label="Профиль">🌿</button>
+    </div>
+    <div class="section" style="margin-top:8px"><h2 style="font-size:22px">Награды</h2></div>
+
+    <div id="mainGoalCard"></div>
+
+    <div class="section"><h2>Ежедневные задания</h2></div>
+    <div id="dailyQuestList"></div>
+
+    <div class="section"><h2>Еженедельные награды</h2></div>
+    <div id="weeklyQuestList"></div>
+    <p class="hint">Награда засчитывается в конце дня или недели, если условие было выполнено. Каждое выполнение добавляется в коллекцию (счётчик «×N»), а прогресс на сегодня/эту неделю начинается заново.</p>
+
+    <div class="section"><h2>Вехи</h2></div>
+    <div id="achList"></div>
+  </section>
+
+  <!-- ПРОФИЛЬ (открывается по клику на кнопку-аватар в правом верхнем углу любого раздела, не через нижнюю навигацию) -->
+  <section class="screen" id="screen-profile">
+    <div class="profile-header">
+      <button class="back-btn" onclick="closeProfile()" aria-label="Назад">←</button>
+      <h2 style="font-size:20px;margin:0">Профиль</h2>
+    </div>
+
+    <div class="profile-photo-block">
+      <div class="profile-photo" id="profilePhotoPreview">👤</div>
+      <div class="profile-photo-actions">
+        <label class="photo-upload-btn">
+          Загрузить фото
+          <input type="file" id="photoInput" accept="image/jpeg,image/png" style="display:none" onchange="handlePhotoSelect(event)">
+        </label>
+        <button type="button" class="photo-remove-btn" id="photoRemoveBtn" style="display:none" onclick="removePhoto()">Удалить фото</button>
+      </div>
+      <p class="hint" style="margin-top:8px">JPEG или PNG, до 5 МБ.</p>
+    </div>
+
+    <form class="profile-form" onsubmit="saveProfile(event)">
+      <label for="profileFirstName">Имя</label>
+      <input id="profileFirstName" type="text" placeholder="Мария" autocomplete="off">
+
+      <label for="profileLastName">Фамилия</label>
+      <input id="profileLastName" type="text" placeholder="Иванова" autocomplete="off">
+
+      <div class="profile-row-2">
+        <div>
+          <label for="profileBirthYear">Год рождения</label>
+          <input id="profileBirthYear" type="number" inputmode="numeric" min="1900" max="2026" placeholder="1992" oninput="autoCalcAge()">
+        </div>
+        <div>
+          <label for="profileAge">Возраст</label>
+          <input id="profileAge" type="number" placeholder="—" readonly title="Считается автоматически по году рождения">
+        </div>
+      </div>
+
+      <label>Пол</label>
+      <div class="gender-toggle">
+        <button type="button" class="gender-btn" data-gender="муж" onclick="setGender('муж')">Мужской</button>
+        <button type="button" class="gender-btn" data-gender="жен" onclick="setGender('жен')">Женский</button>
+      </div>
+
+      <label for="profileTargetWeight">Желаемый конечный вес, кг</label>
+      <input id="profileTargetWeight" type="text" inputmode="decimal" placeholder="54">
+
+      <button type="submit" class="save profile-save-btn">Сохранить</button>
+    </form>
+
+    <div class="section" style="margin-top:28px"><h2>Напоминания</h2></div>
+
+    <section class="reminder">
+      <div class="bell">💧</div>
+      <div style="flex:1">
+        <b>Пить воду</b>
+        <p>Мягкое напоминание, пока приложение открыто</p>
+        <div class="interval-stepper">
+          <button type="button" onclick="adjustReminderInterval('water',-5)" aria-label="Уменьшить интервал">−</button>
+          <span id="waterIntervalLabel">Каждые 120 мин</span>
+          <button type="button" onclick="adjustReminderInterval('water',5)" aria-label="Увеличить интервал">+</button>
+        </div>
+      </div>
+      <span class="toggle" id="waterReminderToggle" onclick="toggleReminderKind('water')"><i></i></span>
+    </section>
+
+    <section class="reminder" style="margin-top:10px">
+      <div class="bell">🧘</div>
+      <div style="flex:1">
+        <b>Сделать разминку</b>
+        <p>Мягкое напоминание, пока приложение открыто</p>
+        <div class="interval-stepper">
+          <button type="button" onclick="adjustReminderInterval('stretch',-5)" aria-label="Уменьшить интервал">−</button>
+          <span id="stretchIntervalLabel">Каждые 60 мин</span>
+          <button type="button" onclick="adjustReminderInterval('stretch',5)" aria-label="Увеличить интервал">+</button>
+        </div>
+      </div>
+      <span class="toggle" id="stretchReminderToggle" onclick="toggleReminderKind('stretch')"><i></i></span>
+    </section>
+
+    <p class="hint">В браузере на iPhone push-уведомления недоступны — напоминания появляются всплывающей подсказкой, пока эта вкладка открыта.</p>
+  </section>
+
+  <nav class="nav">
+    <button class="active" data-screen="home" onclick="showScreen('home')"><b>⌂</b>Главная</button>
+    <button data-screen="diary" onclick="showScreen('diary')"><b>☷</b>Дневник</button>
+    <button data-screen="progress" onclick="showScreen('progress')"><b>◔</b>Прогресс</button>
+    <button data-screen="achievements" onclick="showScreen('achievements')"><b>✦</b>Награды</button>
+  </nav>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<!-- Диалог: записать еду -->
+<dialog id="foodDialog">
+  <form class="modal" method="dialog" onsubmit="saveFood(event)">
+    <h2 id="foodDialogTitle">Записать еду</h2>
+    <p>Напишите блюдо — подсказки появятся сразу из базы ЯХУ.</p>
+    <label for="foodName">Блюдо</label>
+    <input id="foodName" required autocomplete="off" placeholder="Например, гречка с курицей" oninput="searchFood()">
+    <div id="searchResults" class="search-results" aria-live="polite"></div>
+    <div id="manualEntryBlock" style="display:none;margin-top:10px;padding:12px;background:#f7f8f5;border-radius:12px">
+      <label for="manualCalories" style="margin-top:0">Калорийность на 100 г (ккал)</label>
+      <div style="display:flex;gap:8px">
+        <input id="manualCalories" inputmode="numeric" type="number" min="1" placeholder="Например, 150" style="flex:1">
+        <button type="button" class="save" style="white-space:nowrap" onclick="useManualCalories()">Ок</button>
+      </div>
+    </div>
+    <div class="portion-row">
+      <div><label for="foodPortion">Порция, г</label><input id="foodPortion" required inputmode="numeric" type="number" min="1" max="2000" value="120" oninput="updateEstimate()"></div>
+      <div><label>Ориентир</label><div style="padding:12px 0;color:var(--muted);font-size:12px">1 порция ≈ 120 г</div></div>
+    </div>
+    <section class="estimate" aria-live="polite">
+      <small id="estimateLabel">Введите название блюда</small>
+      <strong id="foodEstimate">— ккал</strong>
+      <p id="estimateDetail">Поиск начнётся автоматически.</p>
+    </section>
+    <p class="source-note">Поиск идёт по собственной базе домашних блюд ЯХУ (1000+ блюд с БЖУ, включая воду и чай/кофе без сахара — они также засчитываются в счётчик воды). Это ориентир — рецепт и размер порции влияют на точную калорийность.</p>
+    <div class="modal-actions">
+      <button class="cancel" type="button" value="cancel" onclick="document.getElementById('foodDialog').close()">Отмена</button>
+      <button class="save" id="saveFoodButton" value="save" disabled>Добавить</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Диалог: записать вес -->
+<dialog id="weightDialog">
+  <form class="modal" method="dialog" onsubmit="saveWeight(event)">
+    <h2>Утренний вес</h2>
+    <p>Лучше записывать сразу после пробуждения.</p>
+    <label for="weightInput">Вес, кг</label>
+    <input id="weightInput" required inputmode="decimal" type="text" placeholder="Например, 68.4">
+    <div class="modal-actions">
+      <button class="cancel" type="button" value="cancel" onclick="document.getElementById('weightDialog').close()">Отмена</button>
+      <button class="save" type="submit" value="save">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Всплывающее окно напоминания (вода/разминка) — dialog поднимается в
+     top layer браузера, поэтому оказывается поверх содержимого ЛЮБОГО
+     раздела приложения, в котором сейчас находится пользователь. -->
+<dialog id="reminderDialog">
+  <div class="modal reminder-modal">
+    <div class="reminder-modal-icon" id="reminderModalIcon">💧</div>
+    <h2 id="reminderModalTitle">Пора выпить воды</h2>
+    <p id="reminderModalTip">Небольшой стакан воды сейчас — и организм скажет спасибо.</p>
+    <div class="modal-actions">
+      <button class="save" type="button" onclick="document.getElementById('reminderDialog').close()">Хорошо!</button>
+    </div>
+  </div>
+</dialog>
+
+
+<script src="app.js"></script>
+</body>
+</html>

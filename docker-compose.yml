@@ -1,0 +1,12 @@
+services:
+  yahu:
+    build: .
+    container_name: yahu
+    ports:
+      - "3000:3000"
+    volumes:
+      - yahu-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  yahu-data:
