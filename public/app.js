@@ -642,27 +642,26 @@ function showReminderPopup(kind) {
   if (!dialog.open) dialog.showModal();
 }
 
-// ---------- Звуковой сигнал напоминания (Web Audio API) ----------
-// Генерируем короткий мягкий "бип" сами, без аудиофайлов — работает даже по
-// обычному http (в отличие от системных Notification, которым для многих
-// браузеров нужен именно https). AudioContext создаём один раз и стараемся
-// "разбудить" его при первом клике пользователя по странице — иначе браузеры
-// блокируют звук, запущенный не от прямого действия пользователя, а из
-// сработавшего таймера.
-let reminderAudioCtx = null;
-function ensureReminderAudioContext() {
-  if (!reminderAudioCtx) {
+// ---------- Общий звук приложения (Web Audio API) ----------
+// Генерируем короткие звуки сами, без аудиофайлов — работает даже по обычному
+// http (в отличие от системных Notification, которым для многих браузеров
+// нужен именно https). AudioContext создаём один раз и стараемся "разбудить"
+// его при первом клике пользователя по странице — иначе браузеры блокируют
+// звук, запущенный не от прямого действия пользователя (например, из
+// сработавшего таймера напоминания).
+let appAudioCtx = null;
+function ensureAppAudioContext() {
+  if (!appAudioCtx) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return null;
-    reminderAudioCtx = new Ctx();
+    appAudioCtx = new Ctx();
   }
-  if (reminderAudioCtx.state === 'suspended') reminderAudioCtx.resume().catch(() => {});
-  return reminderAudioCtx;
+  if (appAudioCtx.state === 'suspended') appAudioCtx.resume().catch(() => {});
+  return appAudioCtx;
 }
-document.addEventListener('click', () => ensureReminderAudioContext(), { once: true, capture: true });
 
 function playReminderBeep() {
-  const ctx = ensureReminderAudioContext();
+  const ctx = ensureAppAudioContext();
   if (!ctx) return;
   // Два коротких мягких тона подряд — заметно, но не резко ("аккуратный бип").
   [880, 660].forEach((freq, i) => {
@@ -680,6 +679,47 @@ function playReminderBeep() {
     osc.stop(start + 0.26);
   });
 }
+
+// Негромкий короткий "тик" при нажатии любой кнопки в приложении — заметно
+// тише и короче сигнала напоминания (одиночный тон ~90мс, вместо двойного
+// ~400мс), чтобы не раздражать при частых нажатиях.
+function playClickSound() {
+  const ctx = ensureAppAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(720, now);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.07, now + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.1);
+}
+
+// Единая точка входа для отклика на нажатие: звук + короткое визуальное
+// "сжатие" (совпадает с CSS-переходом transform в :active, но :active не
+// всегда надёжно ловится на мобильных тачскринах, поэтому дублируем классом).
+// Событие ловим один раз на document (делегирование) — работает для ЛЮБОЙ
+// кнопки в приложении, включая те, что появляются позже (диалоги, списки).
+document.addEventListener('pointerdown', (e) => {
+  const control = e.target.closest('button, .toggle, .photo-upload-btn');
+  if (!control || control.disabled) return;
+  ensureAppAudioContext(); // тот же клик "разбудит" звук и для будущих напоминаний
+  playClickSound();
+  control.classList.add('pressed');
+}, true);
+document.addEventListener('pointerup', (e) => {
+  const control = e.target.closest('button, .toggle, .photo-upload-btn');
+  control && control.classList.remove('pressed');
+}, true);
+document.addEventListener('pointercancel', (e) => {
+  const control = e.target.closest('button, .toggle, .photo-upload-btn');
+  control && control.classList.remove('pressed');
+}, true);
 
 // Показывает крупное модальное окно (поверх любого раздела) со звуковым
 // сигналом — и, если разрешено, дополнительно системное уведомление на
@@ -704,7 +744,7 @@ function toggleReminderKind(kind) {
   const cfg = appState.reminders[kind];
   cfg.enabled = !cfg.enabled;
   if (cfg.enabled) {
-    ensureReminderAudioContext(); // подготавливаем звук заранее, пока есть клик пользователя
+    ensureAppAudioContext(); // подготавливаем звук заранее, пока есть клик пользователя
     // Системные уведомления требуют разрешения браузера — запрашиваем его
     // именно в момент включения напоминания (по клику пользователя), иначе
     // браузер такой запрос молча игнорирует.
@@ -1086,6 +1126,59 @@ async function removePhoto() {
 }
 
 loadState();
+
+// ---------- Потяни-чтобы-обновить (pull-to-refresh) ----------
+// У мобильных браузеров (включая Safari на iPhone) в режиме открытой вкладки
+// или установленного PWA нет системного жеста "потянуть экран вниз, чтобы
+// обновить" для веб-страниц — это поведение специфично для Chrome/Android.
+// Реализуем его сами: тянем вниз от самого верха страницы — при отпускании
+// после небольшого порога происходит обычная полная перезагрузка страницы,
+// как кнопка "Обновить" в браузере.
+(function setupPullToRefresh() {
+  const indicator = document.getElementById('pullToRefresh');
+  if (!indicator) return;
+  const THRESHOLD = 70; // px, дальше которых при отпускании страница обновится
+  const MAX_PULL = 110; // px, дальше индикатор не оттягивается — ощущение "предела"
+  let startY = null;
+  let currentDist = 0;
+  let refreshing = false;
+
+  function reset() {
+    indicator.classList.remove('visible', 'ready');
+    indicator.style.transform = 'translate(-50%, -60px) rotate(0deg)';
+    currentDist = 0;
+  }
+
+  document.addEventListener('touchstart', (e) => {
+    if (refreshing) return;
+    // Жест имеет смысл только от самого верха страницы — иначе это обычный
+    // скролл контента вниз/вверх, а не потягивание для обновления.
+    startY = window.scrollY <= 0 ? e.touches[0].clientY : null;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (startY == null || refreshing) return;
+    const delta = e.touches[0].clientY - startY;
+    if (delta <= 0) { reset(); startY = null; return; } // потянули вверх — жест отменён
+    currentDist = Math.min(delta, MAX_PULL);
+    indicator.classList.add('visible');
+    indicator.classList.toggle('ready', currentDist >= THRESHOLD);
+    indicator.style.transform = `translate(-50%, ${currentDist - 60}px) rotate(${currentDist * 2.4}deg)`;
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (startY == null || refreshing) return;
+    startY = null;
+    if (currentDist >= THRESHOLD) {
+      refreshing = true;
+      indicator.classList.add('spinning');
+      indicator.style.transform = 'translate(-50%, 16px) rotate(0deg)';
+      setTimeout(() => window.location.reload(), 250);
+    } else {
+      reset();
+    }
+  });
+})();
 
 // ---------- PWA: регистрация service worker (кэш оболочки приложения) ----------
 if ('serviceWorker' in navigator) {

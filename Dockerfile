@@ -8,7 +8,8 @@ COPY xlsxReader.js ./
 COPY lib ./lib
 COPY public ./public
 
-# Каталог для данных пользователя (db.json) — монтируется как volume в docker-compose.yml.
+# Каталог для данных пользователя (db.json) — монтируется как bind mount
+# (./data на хосте) в docker-compose.yml, поэтому переживает пересборку образа.
 RUN mkdir -p /app/data
 # Эталонная база блюд хранится ВНЕ volume, чтобы при пересборке образа новая
 # версия базы всегда была доступна. Сервер при старте сам копирует её в

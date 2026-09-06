@@ -37,6 +37,14 @@
     -webkit-appearance: none; appearance: none;
   }
   button { touch-action: manipulation; } /* убирает у Safari ~300мс задержку перед реакцией на тап */
+
+  /* Визуальный отклик на нажатие — лёгкое "сжатие" для любой кнопки/переключателя
+     приложения. .pressed ставится/убирается из JS (надёжнее чем :active на
+     тачскринах), :active оставлен как запасной вариант для мыши/клавиатуры. */
+  button, .toggle, .photo-upload-btn { transition: transform .08s ease, opacity .08s ease; }
+  button:active, button.pressed,
+  .toggle:active, .toggle.pressed,
+  .photo-upload-btn:active, .photo-upload-btn.pressed { transform: scale(0.96); opacity: .85; }
   .phone {
     width:100%; max-width:460px; margin:0 auto; background:var(--soft); position:relative;
     padding:env(safe-area-inset-top,20px) 20px calc(90px + env(safe-area-inset-bottom,0px));
@@ -229,6 +237,19 @@
   .toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--ink); color:#fff; padding:11px 18px; border-radius:14px; font-size:13px; opacity:0; transition:.25s; white-space:nowrap; z-index:50; max-width:90vw; overflow:hidden; text-overflow:ellipsis; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
+  /* Потяни-чтобы-обновить: кружок над контентом, следующий за пальцем при
+     оттягивании вниз от самого верха страницы; при отпускании после порога —
+     обычная перезагрузка страницы (как кнопка "Обновить" в браузере). */
+  .pull-refresh {
+    position:fixed; top:0; left:50%; z-index:60; width:40px; height:40px; border-radius:50%;
+    background:#fff; box-shadow:0 4px 14px #17372d22; display:flex; align-items:center; justify-content:center;
+    font-size:18px; color:var(--muted); opacity:0; pointer-events:none; transform:translate(-50%,-60px);
+  }
+  .pull-refresh.visible { opacity:1; }
+  .pull-refresh.ready { color:var(--accent); }
+  .pull-refresh.spinning { animation:pull-refresh-spin .6s linear infinite; }
+  @keyframes pull-refresh-spin { to { transform:translate(-50%,16px) rotate(360deg); } }
+
   /* Dialog */
   dialog { border:0; border-radius:24px; padding:0; width:min(calc(100% - 32px),420px); box-shadow:0 16px 45px #19372e40; }
   dialog::backdrop { background:#19372e77; }
@@ -264,6 +285,9 @@
 </style>
 </head>
 <body>
+<!-- Индикатор жеста "потянуть вниз, чтобы обновить" — вне .phone, чтобы
+     позиционироваться относительно всего окна, а не прокручиваемого контента. -->
+<div class="pull-refresh" id="pullToRefresh"><span id="pullRefreshIcon">↻</span></div>
 <main class="phone">
 
   <!-- ГЛАВНАЯ -->
@@ -314,8 +338,8 @@
       <div class="water-top">
         <div class="water-ico">💧</div>
         <div style="flex:1">
-          <h3 id="waterRemainingText">Осталось выпить 2500 мл</h3>
-          <p id="waterSub">Выпито 0 из 2500 мл</p>
+          <h3 id="waterRemainingText">Осталось выпить 1500 мл</h3>
+          <p id="waterSub">Выпито 0 из 1500 мл</p>
         </div>
       </div>
       <div class="macro-track" style="height:9px"><div class="macro-fill" id="waterBar" style="width:0%;background:#2ea6c9"></div></div>

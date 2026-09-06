@@ -5,8 +5,10 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - yahu-data:/app/data
+      # Bind mount вместо именованного Docker-тома: файл с данными лежит прямо
+      # в ./data внутри проекта — виден, копируется/бэкапится как обычный файл
+      # и не может пропасть при `docker compose down -v`, `docker system prune`
+      # или подобной чистке Docker-томов. Игнорируется git'ом (см. .gitignore),
+      # поэтому push/pull кода в GitHub эту папку никак не затрагивает.
+      - ./data:/app/data
     restart: unless-stopped
-
-volumes:
-  yahu-data:
