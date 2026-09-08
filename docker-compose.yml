@@ -12,3 +12,10 @@ services:
       # поэтому push/pull кода в GitHub эту папку никак не затрагивает.
       - ./data:/app/data
     restart: unless-stopped
+    # Раскомментируйте и заполните, если сервер работает на "засыпающем"
+    # бесплатном хостинге с эфемерным диском (см. README, раздел "Хостинг,
+    # который засыпает") — здесь для локального Docker это не нужно, диск и
+    # так постоянный (bind mount выше).
+    # environment:
+    #   UPSTASH_REDIS_REST_URL: "https://xxxx.upstash.io"
+    #   UPSTASH_REDIS_REST_TOKEN: "xxxxxxxx"

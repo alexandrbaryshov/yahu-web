@@ -205,6 +205,17 @@
   .macro-summary-item .dot { width:8px; height:8px; border-radius:50%; }
   .macro-summary-item b { font-size:15px; color:var(--ink); }
 
+  /* Инструмент разработчика */
+  .devtools-link { display:block; width:100%; margin:28px 0 4px; border:0; background:none; color:var(--muted); font-size:12px; text-align:center; padding:10px; cursor:pointer; opacity:.6; }
+  .devlog-toolbar { display:flex; gap:10px; margin:14px 0; }
+  .devlog-toolbar button { flex:1; border:0; border-radius:12px; padding:11px; font-size:13px; font-weight:700; cursor:pointer; }
+  .devlog-toolbar .refresh-btn { background:var(--mint); color:var(--accent-dark); }
+  .devlog-toolbar .clear-btn { background:#f3e6e2; color:var(--danger); }
+  .devlog-row { background:var(--card); border-radius:14px; padding:11px 14px; margin-bottom:8px; }
+  .devlog-row .dl-action { font-weight:700; font-size:13px; }
+  .devlog-row .dl-meta { font-size:11px; color:var(--muted); margin-top:2px; display:flex; justify-content:space-between; gap:8px; }
+  .devtools-auth-error { color:var(--danger); font-size:12.5px; margin:-8px 0 4px; min-height:16px; }
+
   /* Achievements */
   .main-goal-card { border-radius:22px; padding:22px 18px; text-align:center; background:linear-gradient(135deg,#fdeec2,#f8d48a); margin-bottom:4px; transition:background .3s ease; }
   .main-goal-card.locked { background:#eef0ed; }
@@ -525,6 +536,22 @@
     </section>
 
     <p class="hint">В браузере на iPhone push-уведомления недоступны — напоминания появляются всплывающей подсказкой, пока эта вкладка открыта.</p>
+
+    <button type="button" class="devtools-link" onclick="openDevToolsAuth()">🛠 Инструмент разработчика</button>
+  </section>
+
+  <!-- ИНСТРУМЕНТ РАЗРАБОТЧИКА: журнал действий пользователя (за паролем) -->
+  <section class="screen" id="screen-devtools">
+    <div class="profile-header">
+      <button class="back-btn" onclick="closeDevTools()" aria-label="Назад">←</button>
+      <h2 style="font-size:20px;margin:0">Инструмент разработчика</h2>
+    </div>
+    <p class="hint">Журнал последних действий в приложении — на этом устройстве и на сервере (общий для всех, кто открывает это приложение).</p>
+    <div class="devlog-toolbar">
+      <button type="button" class="refresh-btn" onclick="renderDevLog()">Обновить</button>
+      <button type="button" class="clear-btn" onclick="clearDevLog()">Очистить журнал</button>
+    </div>
+    <div id="devLogList"></div>
   </section>
 
   <nav class="nav">
@@ -595,6 +622,21 @@
       <button class="save" type="button" onclick="document.getElementById('reminderDialog').close()">Хорошо!</button>
     </div>
   </div>
+</dialog>
+
+<!-- Диалог: пароль для входа в "Инструмент разработчика" -->
+<dialog id="devToolsAuthDialog">
+  <form class="modal" method="dialog" onsubmit="submitDevToolsPassword(event)">
+    <h2>Инструмент разработчика</h2>
+    <p>Раздел защищён паролем.</p>
+    <label for="devToolsPassword">Пароль</label>
+    <input id="devToolsPassword" type="password" autocomplete="off" placeholder="••••••••">
+    <p class="devtools-auth-error" id="devToolsAuthError"></p>
+    <div class="modal-actions">
+      <button class="cancel" type="button" value="cancel" onclick="document.getElementById('devToolsAuthDialog').close()">Отмена</button>
+      <button class="save" type="submit" value="save">Войти</button>
+    </div>
+  </form>
 </dialog>
 
 

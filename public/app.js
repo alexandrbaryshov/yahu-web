@@ -46,11 +46,21 @@ const api = {
   del: (path) => fetch(path, { method: 'DELETE' }).then((r) => r.json()),
 };
 
+// ---------- Журнал действий (для "Инструмента разработчика") ----------
+// Отправляется "по факту" (fire-and-forget) — ни на что не влияет и не должно
+// тормозить основной интерфейс, поэтому ошибки записи в журнал намеренно
+// проглатываются.
+function logAction(action, details) {
+  api.post('/api/devlog', { action, details: details || '' }).catch(() => {});
+}
+
 // ---------- Навигация ----------
 // Профиль можно открыть с любого раздела (кнопка-аватар в правом верхнем
 // углу), поэтому запоминаем, откуда пришли, чтобы «Назад» возвращал именно
 // туда, а не всегда на главную.
 let screenBeforeProfile = 'home';
+
+const SCREEN_LABELS = { home: 'Главная', diary: 'Дневник', progress: 'Прогресс', achievements: 'Награды', profile: 'Профиль', devtools: 'Инструмент разработчика' };
 
 function showScreen(name) {
   const current = document.querySelector('.screen.active');
@@ -60,6 +70,7 @@ function showScreen(name) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
   document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('active', b.dataset.screen === name));
+  if (name !== 'devtools') logAction('Переход в раздел', SCREEN_LABELS[name] || name);
 }
 
 function closeProfile() {
@@ -154,6 +165,7 @@ async function addWaterQuick() {
   renderWater();
   const left = appState.waterRemaining;
   toast(left > 0 ? `💧 +250 мл, осталось ${left} мл` : '💧 Норма воды выполнена!');
+  logAction('Добавлена вода', '+250 мл (быстрое действие)');
 }
 
 function renderMacroBar(barId, valId, value, target, isOverBudget) {
@@ -272,8 +284,10 @@ function round1(n) {
 }
 
 async function deleteFood(id) {
+  const food = appState.foods.find((f) => f.id === id);
   appState = await api.del('/api/foods/' + id);
   render();
+  logAction('Удалена запись еды', food ? `${food.name} · ${food.calories} ккал` : id);
 }
 
 // ---------- Прогресс: календарные периоды (неделя Пн–Вс / месяц 1–31) с навигацией ----------
@@ -755,12 +769,14 @@ function toggleReminderKind(kind) {
   toast(cfg.enabled
     ? `${kind === 'water' ? '💧 Напоминания пить воду' : '🧘 Напоминания о разминке'} включены — каждые ${cfg.intervalMinutes} мин`
     : `${kind === 'water' ? 'Напоминания пить воду' : 'Напоминания о разминке'} выключены`);
+  logAction(cfg.enabled ? 'Включено напоминание' : 'Выключено напоминание', kind === 'water' ? 'Пить воду' : 'Сделать разминку');
   saveReminders();
 }
 
 function adjustReminderInterval(kind, delta) {
   const cfg = appState.reminders[kind];
   cfg.intervalMinutes = Math.max(5, Math.min(240, cfg.intervalMinutes + delta));
+  logAction('Изменён интервал напоминания', `${kind === 'water' ? 'Пить воду' : 'Сделать разминку'}: ${cfg.intervalMinutes} мин`);
   saveReminders();
 }
 
@@ -974,6 +990,7 @@ async function saveFood(event) {
     document.getElementById('foodDialog').close();
     render();
     toast(`Запись обновлена: ${name} · ${calories} ккал`);
+    logAction('Отредактирована запись еды', `${name} · ${calories} ккал, ${grams} г`);
     return;
   }
 
@@ -983,6 +1000,7 @@ async function saveFood(event) {
   if (!appState.isOverBudget) {
     toast(wasWater ? `Добавлено: ${name} · +${grams} мл воды 💧` : `Добавлено: ${name} · ${calories} ккал`);
   }
+  logAction('Добавлена еда', `${name} · ${calories} ккал, ${grams} г${wasWater ? ' (учтено как вода)' : ''}`);
 }
 
 // ---------- Диалог: вес ----------
@@ -1001,6 +1019,7 @@ async function saveWeight(event) {
   document.getElementById('weightDialog').close();
   render();
   toast('Вес сохранён');
+  logAction('Записан вес', `${kilograms} кг`);
 }
 
 // ---------- Профиль ----------
@@ -1087,6 +1106,7 @@ async function saveProfile(event) {
   appState = result;
   render();
   toast('Профиль сохранён');
+  logAction('Сохранён профиль', `${body.firstName} ${body.lastName}`.trim() || '(без имени)');
 }
 
 function handlePhotoSelect(event) {
@@ -1111,6 +1131,7 @@ function handlePhotoSelect(event) {
       appState = result;
       render();
       toast('Фото обновлено');
+      logAction('Загружено фото профиля', file.name);
     } catch (e) {
       toast('Не удалось загрузить фото');
     }
@@ -1123,9 +1144,75 @@ async function removePhoto() {
   appState = await api.del('/api/profile/photo');
   render();
   toast('Фото удалено');
+  logAction('Удалено фото профиля');
 }
 
 loadState();
+
+// ---------- Инструмент разработчика (журнал действий пользователя) ----------
+function openDevToolsAuth() {
+  document.getElementById('devToolsPassword').value = '';
+  document.getElementById('devToolsAuthError').textContent = '';
+  document.getElementById('devToolsAuthDialog').showModal();
+  setTimeout(() => document.getElementById('devToolsPassword').focus(), 100);
+}
+
+async function submitDevToolsPassword(event) {
+  event.preventDefault();
+  const password = document.getElementById('devToolsPassword').value;
+  const errorEl = document.getElementById('devToolsAuthError');
+  let data;
+  try {
+    data = await api.post('/api/devtools/auth', { password });
+  } catch (e) {
+    errorEl.textContent = 'Не удалось проверить пароль — попробуйте ещё раз';
+    return;
+  }
+  if (data.ok) {
+    document.getElementById('devToolsAuthDialog').close();
+    showScreen('devtools');
+    renderDevLog();
+  } else {
+    errorEl.textContent = 'Неверный пароль';
+    document.getElementById('devToolsPassword').value = '';
+    document.getElementById('devToolsPassword').focus();
+  }
+}
+
+function closeDevTools() {
+  showScreen('profile');
+}
+
+async function renderDevLog() {
+  const list = document.getElementById('devLogList');
+  list.innerHTML = `<div class="empty"><span class="ico">⏳</span>Загрузка журнала…</div>`;
+  let data;
+  try {
+    data = await api.get('/api/devlog');
+  } catch (e) {
+    list.innerHTML = `<div class="empty"><span class="ico">⚠️</span>Не удалось загрузить журнал.</div>`;
+    return;
+  }
+  const entries = data.entries || [];
+  if (!entries.length) {
+    list.innerHTML = `<div class="empty"><span class="ico">🗒️</span>Журнал пуст.</div>`;
+    return;
+  }
+  list.innerHTML = entries.map((e) => {
+    const d = new Date(e.ts);
+    const when = `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    return `<div class="devlog-row">
+      <div class="dl-action">${escapeHtml(e.action)}</div>
+      <div class="dl-meta"><span>${escapeHtml(e.details || '')}</span><span>${when}</span></div>
+    </div>`;
+  }).join('');
+}
+
+async function clearDevLog() {
+  if (!window.confirm('Очистить весь журнал действий? Это необратимо.')) return;
+  await api.del('/api/devlog');
+  renderDevLog();
+}
 
 // ---------- Потяни-чтобы-обновить (pull-to-refresh) ----------
 // У мобильных браузеров (включая Safari на iPhone) в режиме открытой вкладки
@@ -1173,6 +1260,7 @@ loadState();
       refreshing = true;
       indicator.classList.add('spinning');
       indicator.style.transform = 'translate(-50%, 16px) rotate(0deg)';
+      logAction('Обновление страницы жестом pull-to-refresh');
       setTimeout(() => window.location.reload(), 250);
     } else {
       reset();

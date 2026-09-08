@@ -6,6 +6,9 @@
 //   lib/motivational.js — мотивационная фраза дня
 //   lib/dishes.js       — база блюд: загрузка/поиск/точное совпадение по имени
 //   lib/store.js        — состояние приложения (JSON-файл) + дефолты/валидация
+//   lib/remote-sync.js  — опциональная синхронизация состояния с Upstash Redis
+//                         (нужна на "засыпающем" бесплатном хостинге, где
+//                         локальный диск не переживает пробуждение контейнера)
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
@@ -14,9 +17,15 @@ const { URL } = require('url');
 const { sendJSON, readBody, serveStatic } = require('./lib/http-utils');
 const { getMotivationalPhrase } = require('./lib/motivational');
 const { createDishesRepository } = require('./lib/dishes');
-const { createStore, normalizeReminder, isSameDay, sumToday, DAILY_TARGETS } = require('./lib/store');
+const { createStore, normalizeReminder, isSameDay, sumToday, DAILY_TARGETS, DEV_LOG_LIMIT } = require('./lib/store');
 const { processAchievements, getAchievementsView } = require('./lib/achievements');
 const { buildMacroTip } = require('./lib/macro-tip');
+const { syncStoreWithUpstash } = require('./lib/remote-sync');
+
+// Пароль от раздела "Инструмент разработчика" (журнал действий пользователя).
+// Хранится только на сервере — в отличие от проверки на клиенте, его нельзя
+// подсмотреть, просто прочитав исходный код страницы в браузере.
+const DEV_TOOL_PASSWORD = process.env.DEV_TOOL_PASSWORD || 'B201190aU';
 
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'db.json');
@@ -282,6 +291,42 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, computeDerived());
     }
 
+    // ---- Инструмент разработчика: журнал действий пользователя ----
+    // Запись в журнал (POST) не требует пароля — логируется прозрачно, что бы
+    // ни делал пользователь. Пароль нужен только для входа в САМ раздел на
+    // клиенте (см. openDevToolsAuth() в app.js); проверяется здесь, на
+    // сервере, чтобы правильный пароль нельзя было подсмотреть, просто
+    // открыв исходный код страницы в браузере.
+    if (pathname === '/api/devtools/auth' && req.method === 'POST') {
+      const body = await readBody(req);
+      const ok = String(body.password || '') === DEV_TOOL_PASSWORD;
+      state.devLog.push({ id: crypto.randomUUID(), ts: new Date().toISOString(), action: ok ? 'Вход в инструмент разработчика' : 'Неудачная попытка входа в инструмент разработчика', details: '' });
+      if (state.devLog.length > DEV_LOG_LIMIT) state.devLog = state.devLog.slice(-DEV_LOG_LIMIT);
+      store.save();
+      return sendJSON(res, ok ? 200 : 401, { ok });
+    }
+
+    if (pathname === '/api/devlog' && req.method === 'GET') {
+      return sendJSON(res, 200, { entries: [...state.devLog].reverse() }); // новые сверху
+    }
+
+    if (pathname === '/api/devlog' && req.method === 'POST') {
+      const body = await readBody(req);
+      const action = String(body.action || '').trim().slice(0, 200);
+      if (!action) return sendJSON(res, 400, { error: 'Не указано действие' });
+      const details = String(body.details || '').trim().slice(0, 500);
+      state.devLog.push({ id: crypto.randomUUID(), ts: new Date().toISOString(), action, details });
+      if (state.devLog.length > DEV_LOG_LIMIT) state.devLog = state.devLog.slice(-DEV_LOG_LIMIT);
+      store.save();
+      return sendJSON(res, 200, { ok: true });
+    }
+
+    if (pathname === '/api/devlog' && req.method === 'DELETE') {
+      state.devLog = [];
+      store.save();
+      return sendJSON(res, 200, { ok: true });
+    }
+
     // ---- Статика ----
     if (req.method === 'GET') return serveStatic(PUBLIC_DIR, res, pathname);
 
@@ -292,6 +337,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`ЯХУ запущен: http://localhost:${PORT}`);
-});
+// Ждём попытки восстановить состояние из Upstash Redis (если он настроен
+// переменными окружения) ДО того, как сервер начнёт принимать запросы —
+// иначе первый же запрос мог бы увидеть пустое состояние, которое через
+// мгновение перезапишется восстановленным.
+(async () => {
+  await syncStoreWithUpstash(store);
+  server.listen(PORT, () => {
+    console.log(`ЯХУ запущен: http://localhost:${PORT}`);
+  });
+})();
