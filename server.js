@@ -20,7 +20,7 @@ const { createDishesRepository } = require('./lib/dishes');
 const { createStore, normalizeReminder, isSameDay, sumToday, DAILY_TARGETS, DEV_LOG_LIMIT } = require('./lib/store');
 const { processAchievements, getAchievementsView } = require('./lib/achievements');
 const { buildMacroTip } = require('./lib/macro-tip');
-const { syncStoreWithUpstash } = require('./lib/remote-sync');
+const { syncStoreWithUpstash, getStatus: getUpstashStatus } = require('./lib/remote-sync');
 
 // Пароль от раздела "Инструмент разработчика" (журнал действий пользователя).
 // Хранится только на сервере — в отличие от проверки на клиенте, его нельзя
@@ -289,6 +289,18 @@ const server = http.createServer(async (req, res) => {
       };
       store.save();
       return sendJSON(res, 200, computeDerived());
+    }
+
+    // ---- API: статус хранилища (диагностика "засыпающего" хостинга) ----
+    // Открыть прямо в браузере — /api/health — чтобы своими глазами
+    // увидеть, подключён ли Upstash и когда последний раз успешно
+    // синхронизировался, не копаясь в логах хостинга.
+    if (pathname === '/api/health' && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        ok: true,
+        localRecordsCount: state.foods.length + state.weights.length + state.water.length,
+        upstash: getUpstashStatus(),
+      });
     }
 
     // ---- Инструмент разработчика: журнал действий пользователя ----

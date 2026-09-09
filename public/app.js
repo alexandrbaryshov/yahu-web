@@ -86,18 +86,56 @@ function toast(text) {
 }
 
 // ---------- Загрузка состояния ----------
+// ---------- Кэш состояния (мгновенная загрузка при обновлении страницы) ----------
+// localStorage переживает полную перезагрузку страницы (в отличие от обычных
+// JS-переменных), поэтому используем его как "снимок" последнего известного
+// состояния: при каждом обновлении страницы он показывается СРАЗУ, без
+// ожидания ответа сервера, а затем тихо обновляется свежими данными, как
+// только они приходят (классический паттерн stale-while-revalidate). Именно
+// это убирает заметную паузу в 1.5-2 секунды при каждом F5/pull-to-refresh —
+// пользователь не смотрит на пустой экран, пока идёт сетевой запрос.
+const STATE_CACHE_KEY = 'yahu:lastState:v1';
+
+function cacheState(state) {
+  try {
+    // Фото профиля может весить несколько мегабайт в base64 — кэшировать его
+    // на каждый рендер бессмысленно (не нужно для "мгновенных цифр" на
+    // главном экране) и рискованно для лимита localStorage (обычно 5-10 МБ).
+    const toCache = { ...state, profile: { ...state.profile, photoDataUrl: null } };
+    localStorage.setItem(STATE_CACHE_KEY, JSON.stringify(toCache));
+  } catch (e) { /* приватный режим браузера, переполнение квоты и т.п. — не критично */ }
+}
+
+function readCachedState() {
+  try {
+    const raw = localStorage.getItem(STATE_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
 async function loadState() {
+  // 1) Мгновенно показываем последний известный снимок, если он есть —
+  // без этого шага экран был бы пустым все 1.5-2 секунды сетевого запроса.
+  const cached = readCachedState();
+  if (cached) {
+    appState = cached;
+    wasOverBudget = appState.isOverBudget;
+    render();
+  }
+  // 2) Догружаем актуальные данные с сервера и тихо обновляем экран —
+  // пользователь к этому моменту уже видит интерфейс и может им пользоваться.
   try {
     appState = await api.get('/api/state');
     wasOverBudget = appState.isOverBudget;
     render();
   } catch (e) {
-    toast('Не удалось связаться с сервером');
+    if (!cached) toast('Не удалось связаться с сервером');
   }
 }
 
 function render() {
   if (!appState) return;
+  cacheState(appState);
   renderHome();
   renderMacroTip();
   renderDiary();
@@ -1184,6 +1222,7 @@ function closeDevTools() {
 }
 
 async function renderDevLog() {
+  renderStorageStatus();
   const list = document.getElementById('devLogList');
   list.innerHTML = `<div class="empty"><span class="ico">⏳</span>Загрузка журнала…</div>`;
   let data;
@@ -1206,6 +1245,34 @@ async function renderDevLog() {
       <div class="dl-meta"><span>${escapeHtml(e.details || '')}</span><span>${when}</span></div>
     </div>`;
   }).join('');
+}
+
+async function renderStorageStatus() {
+  const el = document.getElementById('storageStatus');
+  let health;
+  try {
+    health = await api.get('/api/health');
+  } catch (e) {
+    el.innerHTML = `<div class="storage-status warn"><b>⚠️ Не удалось получить статус хранилища</b>Проверьте соединение с сервером.</div>`;
+    return;
+  }
+  const u = health.upstash;
+  if (u.configError) {
+    el.innerHTML = `<div class="storage-status warn"><b>⚠️ Upstash настроен неверно</b>${escapeHtml(u.configError)}</div>`;
+    return;
+  }
+  if (!u.configured) {
+    el.innerHTML = `<div class="storage-status off"><b>💾 Только локальное хранилище</b>Upstash Redis не подключён — на "засыпающем" бесплатном хостинге прогресс будет сбрасываться при пробуждении контейнера. Инструкция — в README, раздел «Хостинг, который засыпает».</div>`;
+    return;
+  }
+  const loadLine = u.lastLoadOk === true ? 'Состояние при старте сервера восстановлено успешно.'
+    : u.lastLoadOk === false ? `Ошибка при восстановлении состояния: ${escapeHtml(u.lastLoadError || '')}`
+    : 'Восстановление при старте ещё не проверялось.';
+  const saveLine = u.lastSaveOk === true ? `Последнее сохранение прошло успешно (${new Date(u.lastSaveAt).toLocaleTimeString('ru-RU')}).`
+    : u.lastSaveOk === false ? `Ошибка последнего сохранения: ${escapeHtml(u.lastSaveError || '')}`
+    : 'Изменений с момента старта сервера ещё не было.';
+  const allGood = u.lastLoadOk !== false && u.lastSaveOk !== false;
+  el.innerHTML = `<div class="storage-status ${allGood ? 'ok' : 'warn'}"><b>${allGood ? '✅ Upstash подключён' : '⚠️ Upstash подключён, но есть ошибки'}</b>${loadLine}<br>${saveLine}</div>`;
 }
 
 async function clearDevLog() {

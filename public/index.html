@@ -215,6 +215,11 @@
   .devlog-row .dl-action { font-weight:700; font-size:13px; }
   .devlog-row .dl-meta { font-size:11px; color:var(--muted); margin-top:2px; display:flex; justify-content:space-between; gap:8px; }
   .devtools-auth-error { color:var(--danger); font-size:12.5px; margin:-8px 0 4px; min-height:16px; }
+  .storage-status { border-radius:16px; padding:14px 16px; margin:14px 0; font-size:13px; line-height:1.5; }
+  .storage-status.ok { background:var(--mint); color:var(--accent-dark); }
+  .storage-status.warn { background:#fdf1ee; color:var(--danger); }
+  .storage-status.off { background:#eef0ed; color:var(--muted); }
+  .storage-status b { display:block; margin-bottom:3px; font-size:14px; }
 
   /* Achievements */
   .main-goal-card { border-radius:22px; padding:22px 18px; text-align:center; background:linear-gradient(135deg,#fdeec2,#f8d48a); margin-bottom:4px; transition:background .3s ease; }
@@ -547,6 +552,7 @@
       <h2 style="font-size:20px;margin:0">Инструмент разработчика</h2>
     </div>
     <p class="hint">Журнал последних действий в приложении — на этом устройстве и на сервере (общий для всех, кто открывает это приложение).</p>
+    <div id="storageStatus"></div>
     <div class="devlog-toolbar">
       <button type="button" class="refresh-btn" onclick="renderDevLog()">Обновить</button>
       <button type="button" class="clear-btn" onclick="clearDevLog()">Очистить журнал</button>
