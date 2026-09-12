@@ -8,23 +8,38 @@ let wasOverBudget = false;
 // ---------- Общие хелперы для работы с датами ----------
 // Используются и дневником (группировка по дням), и графиками прогресса
 // (границы недели/месяца), поэтому вынесены в одно место.
+//
+// День считается по МОСКОВСКОМУ времени (тем же приёмом, что и на сервере —
+// см. lib/moscow-time.js), а не по часовому поясу устройства: так дневник и
+// дашборд всегда согласованы друг с другом и с сервером, даже если часы на
+// телефоне почему-то настроены неверно.
+const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3 круглый год (без перехода на летнее время с 2014 г.)
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function shiftToMoscow(d) { return new Date(d.getTime() + MOSCOW_OFFSET_MS); }
+
+// Достаёт год/месяц/день по-московски из любого момента — не через
+// getFullYear/getMonth/getDate (те смотрят на часовой пояс устройства).
+function moscowParts(d) {
+  const s = shiftToMoscow(d);
+  return { year: s.getUTCFullYear(), month: s.getUTCMonth(), day: s.getUTCDate() };
+}
+
 function startOfDay(d) {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  const p = moscowParts(d);
+  return new Date(Date.UTC(p.year, p.month, p.day) - MOSCOW_OFFSET_MS);
 }
 function endOfDay(d) {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(startOfDay(d).getTime() + MS_PER_DAY - 1);
 }
 // Подпись для 7-дневного блока графика («1–7» либо, если блок пересекает
 // границу месяца, «25–1 сент.»). Используется и для калорий/воды, и для веса.
 function chunkLabel(chunk) {
-  const sameMonth = chunk.start.getMonth() === chunk.end.getMonth();
-  const range = `${chunk.start.getDate()}–${chunk.end.getDate()}`;
-  return sameMonth ? range : `${range} ${chunk.end.toLocaleDateString('ru-RU', { month: 'short' })}`;
+  const ps = moscowParts(chunk.start);
+  const pe = moscowParts(chunk.end);
+  const sameMonth = ps.month === pe.month;
+  const range = `${ps.day}–${pe.day}`;
+  return sameMonth ? range : `${range} ${chunk.end.toLocaleDateString('ru-RU', { month: 'short', timeZone: 'Europe/Moscow' })}`;
 }
 
 // Общий helper для запросов к API — убирает повторяющийся boilerplate
@@ -311,8 +326,8 @@ function diaryDayLabel(dayDate) {
   const diffDays = Math.round((startOfDay(new Date()) - dayDate) / MS_PER_DAY);
   if (diffDays === 0) return 'Сегодня';
   if (diffDays === 1) return 'Вчера';
-  const opts = { weekday: 'long', day: 'numeric', month: 'long' };
-  if (dayDate.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  const opts = { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' };
+  if (moscowParts(dayDate).year !== moscowParts(new Date()).year) opts.year = 'numeric';
   const label = dayDate.toLocaleDateString('ru-RU', opts);
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
@@ -339,15 +354,12 @@ let chartPeriod = {
 };
 
 function startOfWeek(d) {
-  const r = startOfDay(d);
-  const day = (r.getDay() + 6) % 7; // Пн=0 ... Вс=6 (неделя начинается с понедельника)
-  r.setDate(r.getDate() - day);
-  return r;
+  const start = startOfDay(d);
+  const dow = (shiftToMoscow(d).getUTCDay() + 6) % 7; // Пн=0 ... Вс=6, по-московски
+  return new Date(start.getTime() - dow * MS_PER_DAY);
 }
 function endOfWeek(d) {
-  const e = startOfWeek(d);
-  e.setDate(e.getDate() + 6);
-  return endOfDay(e);
+  return new Date(startOfWeek(d).getTime() + 7 * MS_PER_DAY - 1);
 }
 function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0); }
 function endOfMonth(d) { return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999); }
@@ -401,11 +413,11 @@ function shiftPeriod(chartKey, direction) {
 
 function formatPeriodLabel(mode, range) {
   if (mode === 'month') {
-    return range.start.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+    return range.start.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric', timeZone: 'Europe/Moscow' });
   }
-  const sameMonth = range.start.getMonth() === range.end.getMonth();
-  const startStr = range.start.toLocaleDateString('ru-RU', { day: 'numeric', month: sameMonth ? undefined : 'short' });
-  const endStr = range.end.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const sameMonth = moscowParts(range.start).month === moscowParts(range.end).month;
+  const startStr = range.start.toLocaleDateString('ru-RU', { day: 'numeric', month: sameMonth ? undefined : 'short', timeZone: 'Europe/Moscow' });
+  const endStr = range.end.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' });
   return `${startStr}–${endStr}`;
 }
 
@@ -424,10 +436,10 @@ function chunkRangeByWeek(start, end) {
   const chunks = [];
   let cur = new Date(start);
   while (cur <= end) {
-    const chunkEnd = new Date(cur); chunkEnd.setDate(chunkEnd.getDate() + 6);
+    const chunkEnd = new Date(cur.getTime() + 6 * MS_PER_DAY);
     const actualEnd = endOfDay(chunkEnd) > end ? new Date(end) : endOfDay(chunkEnd);
     chunks.push({ start: new Date(cur), end: actualEnd });
-    cur = startOfDay(new Date(actualEnd)); cur.setDate(cur.getDate() + 1);
+    cur = new Date(startOfDay(actualEnd).getTime() + MS_PER_DAY);
   }
   return chunks;
 }
@@ -439,11 +451,11 @@ function sumInRange(entries, field, start, end) {
 // values для дневного (недельного) режима: по одному числу на каждый день Пн..Вс.
 function dailySeries(entries, field, range) {
   const values = [], labels = [];
-  const d = new Date(range.start);
+  let d = new Date(range.start);
   while (d <= range.end) {
     values.push(sumInRange(entries, field, d, endOfDay(d)));
-    labels.push(d.toLocaleDateString('ru-RU', { weekday: 'short' }));
-    d.setDate(d.getDate() + 1);
+    labels.push(d.toLocaleDateString('ru-RU', { weekday: 'short', timeZone: 'Europe/Moscow' }));
+    d = new Date(d.getTime() + MS_PER_DAY);
   }
   return { values, labels };
 }
@@ -470,13 +482,13 @@ function monthlyChunkedSeries(entries, field, range, aggregate) {
 function weightWeekSeries(range) {
   const entries = appState.weights;
   const values = [], labels = [];
-  const d = new Date(range.start);
+  let d = new Date(range.start);
   while (d <= range.end) {
     const dayEnd = endOfDay(d);
     const dayEntries = entries.filter((e) => { const ed = new Date(e.date); return ed >= d && ed <= dayEnd; });
     values.push(dayEntries.length ? dayEntries[dayEntries.length - 1].kilograms : null);
-    labels.push(d.toLocaleDateString('ru-RU', { weekday: 'short' }));
-    d.setDate(d.getDate() + 1);
+    labels.push(d.toLocaleDateString('ru-RU', { weekday: 'short', timeZone: 'Europe/Moscow' }));
+    d = new Date(d.getTime() + MS_PER_DAY);
   }
   return { values, labels };
 }
@@ -622,7 +634,7 @@ function renderQuestList(containerId, items) {
 // Вехи — разовые достижения по общему факту использования приложения
 // (не завязаны на конкретный день/неделю, поэтому считаются на клиенте).
 function renderMilestones() {
-  const uniqueDays = new Set(appState.foods.map((f) => new Date(f.date).toDateString())).size;
+  const uniqueDays = new Set(appState.foods.map((f) => startOfDay(new Date(f.date)).getTime())).size;
   const remindersOn = !!(appState.reminders && (appState.reminders.water.enabled || appState.reminders.stretch.enabled));
   const items = [
     { title: 'Первый шаг', detail: 'Записать первую еду', icon: '🌱', unlocked: appState.foods.length > 0 },
