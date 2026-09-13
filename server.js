@@ -158,7 +158,6 @@ const server = http.createServer(async (req, res) => {
       // удалить/пересчитать при последующем редактировании или удалении еды.
       syncFoodWater(state, foodId, name, grams, now);
 
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -180,7 +179,6 @@ const server = http.createServer(async (req, res) => {
 
       syncFoodWater(state, id, existing.name, existing.grams, existing.date);
 
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -191,7 +189,6 @@ const server = http.createServer(async (req, res) => {
       // Убираем и связанную запись воды, если это блюдо было отмечено как вода —
       // иначе после удаления еды выпитая вода "оставалась бы" в сумме за день.
       state.water = state.water.filter((w) => w.foodId !== id);
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -205,7 +202,6 @@ const server = http.createServer(async (req, res) => {
       const today = new Date().toISOString();
       state.weights = state.weights.filter((w) => !isSameDay(w.date, today));
       state.weights.push({ id: crypto.randomUUID(), kilograms, date: today });
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -217,7 +213,6 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 400, { error: 'Некорректный объём воды' });
       }
       state.water.push({ id: crypto.randomUUID(), amount, date: new Date().toISOString(), source: 'quick' });
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -228,7 +223,6 @@ const server = http.createServer(async (req, res) => {
       if (todayEntries.length) {
         const last = todayEntries[todayEntries.length - 1];
         state.water = state.water.filter((w) => w.id !== last.id);
-        store.save();
       }
       return sendJSON(res, 200, computeDerived());
     }
@@ -251,7 +245,6 @@ const server = http.createServer(async (req, res) => {
       // в разделе «Награды».
       if (targetWeight != null) state.goalWeight = targetWeight;
 
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -269,14 +262,12 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 400, { error: 'Файл больше 5 МБ' });
       }
       state.profile = { ...state.profile, photoDataUrl: dataUrl };
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
     // ---- API: удалить фото профиля ----
     if (pathname === '/api/profile/photo' && req.method === 'DELETE') {
       state.profile = { ...state.profile, photoDataUrl: null };
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 
@@ -287,7 +278,6 @@ const server = http.createServer(async (req, res) => {
         water: normalizeReminder(body.water, state.reminders.water),
         stretch: normalizeReminder(body.stretch, state.reminders.stretch),
       };
-      store.save();
       return sendJSON(res, 200, computeDerived());
     }
 

@@ -214,11 +214,33 @@ function renderWater() {
 }
 
 async function addWaterQuick() {
-  appState = await api.post('/api/water', { amount: 250 });
+  // Мгновенный отклик: обновляем цифры на экране СРАЗУ, не дожидаясь ответа
+  // сервера — на медленной сети (или "просыпающемся" бесплатном хостинге)
+  // это может занять секунды, и без этого шага непонятно, сработало ли
+  // нажатие вообще. Настоящий ответ сервера придёт следом и молча поправит
+  // цифры, если они вдруг разошлись (например, сегодняшняя награда).
+  const prevState = appState;
+  appState = {
+    ...appState,
+    todayWater: appState.todayWater + 250,
+    waterRemaining: Math.max(0, appState.waterRemaining - 250),
+  };
   renderWater();
-  const left = appState.waterRemaining;
-  toast(left > 0 ? `💧 +250 мл, осталось ${left} мл` : '💧 Норма воды выполнена!');
-  logAction('Добавлена вода', '+250 мл (быстрое действие)');
+
+  try {
+    const result = await api.post('/api/water', { amount: 250 });
+    if (result.error) throw new Error(result.error);
+    appState = result;
+    renderWater();
+    renderAchievements(); // мог засчитаться "Выпита норма воды"
+    const left = appState.waterRemaining;
+    toast(left > 0 ? `💧 +250 мл, осталось ${left} мл` : '💧 Норма воды выполнена!');
+    logAction('Добавлена вода', '+250 мл (быстрое действие)');
+  } catch (e) {
+    appState = prevState; // сервер не подтвердил — откатываем оптимистичное обновление
+    renderWater();
+    toast('Не удалось сохранить — проверьте соединение');
+  }
 }
 
 function renderMacroBar(barId, valId, value, target, isOverBudget) {
@@ -338,9 +360,35 @@ function round1(n) {
 
 async function deleteFood(id) {
   const food = appState.foods.find((f) => f.id === id);
-  appState = await api.del('/api/foods/' + id);
+  if (!food) return;
+  // Мгновенный отклик: убираем запись из списка и пересчитываем сумму сразу,
+  // не дожидаясь сервера. wasWater грубо прикидываем по тому, что запись
+  // вообще что-то весила и калорий у неё 0 — точный флаг знает только
+  // сервер (база блюд), но для мгновенной подсказки этого достаточно, а
+  // настоящие цифры подтянутся следом.
+  const prevState = appState;
+  appState = {
+    ...appState,
+    foods: appState.foods.filter((f) => f.id !== id),
+    todayCalories: Math.max(0, appState.todayCalories - food.calories),
+    todayProtein: Math.max(0, appState.todayProtein - (food.protein || 0)),
+    todayFat: Math.max(0, appState.todayFat - (food.fat || 0)),
+    todayCarbs: Math.max(0, appState.todayCarbs - (food.carbs || 0)),
+  };
+  appState.isOverBudget = appState.todayCalories > appState.dailyTarget;
   render();
-  logAction('Удалена запись еды', food ? `${food.name} · ${food.calories} ккал` : id);
+
+  try {
+    const result = await api.del('/api/foods/' + id);
+    if (result.error) throw new Error(result.error);
+    appState = result;
+    render();
+    logAction('Удалена запись еды', `${food.name} · ${food.calories} ккал`);
+  } catch (e) {
+    appState = prevState;
+    toast('Не удалось удалить — обновляю данные…');
+    loadState();
+  }
 }
 
 // ---------- Прогресс: календарные периоды (неделя Пн–Вс / месяц 1–31) с навигацией ----------
@@ -1044,13 +1092,44 @@ async function saveFood(event) {
     return;
   }
 
-  appState = await api.post('/api/foods', payload);
+  // Мгновенный отклик: показываем новую запись и обновлённые цифры СРАЗУ, не
+  // дожидаясь ответа сервера — на медленной сети иначе непонятно, сработало
+  // ли нажатие "Добавить". Настоящий ответ сервера подменит это следом
+  // (получит правильный id и т.п.), а при ошибке — просто перезапросим
+  // актуальное состояние с сервера.
+  const prevState = appState;
+  const optimisticFood = { id: 'optimistic-' + Date.now(), name, calories, protein, fat, carbs, grams, date: new Date().toISOString() };
+  const optimisticCalories = appState.todayCalories + calories;
+  appState = {
+    ...appState,
+    foods: [optimisticFood, ...appState.foods],
+    todayCalories: optimisticCalories,
+    todayProtein: appState.todayProtein + protein,
+    todayFat: appState.todayFat + fat,
+    todayCarbs: appState.todayCarbs + carbs,
+    isOverBudget: optimisticCalories > appState.dailyTarget,
+  };
+  if (wasWater) {
+    appState.todayWater += grams;
+    appState.waterRemaining = Math.max(0, appState.waterRemaining - grams);
+  }
   document.getElementById('foodDialog').close();
   render();
   if (!appState.isOverBudget) {
     toast(wasWater ? `Добавлено: ${name} · +${grams} мл воды 💧` : `Добавлено: ${name} · ${calories} ккал`);
   }
-  logAction('Добавлена еда', `${name} · ${calories} ккал, ${grams} г${wasWater ? ' (учтено как вода)' : ''}`);
+
+  try {
+    const result = await api.post('/api/foods', payload);
+    if (result.error) throw new Error(result.error);
+    appState = result;
+    render();
+    logAction('Добавлена еда', `${name} · ${calories} ккал, ${grams} г${wasWater ? ' (учтено как вода)' : ''}`);
+  } catch (e) {
+    appState = prevState;
+    toast('Не удалось сохранить — обновляю данные…');
+    loadState();
+  }
 }
 
 // ---------- Диалог: вес ----------
@@ -1065,11 +1144,27 @@ async function saveWeight(event) {
   const raw = document.getElementById('weightInput').value.replace(',', '.');
   const kilograms = Number(raw);
   if (!Number.isFinite(kilograms) || kilograms <= 0) return;
-  appState = await api.post('/api/weights', { kilograms });
+
+  // Мгновенный отклик: обновляем "Цель на год" и т.п. сразу же, не дожидаясь
+  // сервера — настоящий ответ подтянется следом (в т.ч. пересчитает
+  // "Записан вес" в наградах).
+  const prevState = appState;
+  appState = { ...appState, lastWeight: kilograms };
   document.getElementById('weightDialog').close();
   render();
   toast('Вес сохранён');
-  logAction('Записан вес', `${kilograms} кг`);
+
+  try {
+    const result = await api.post('/api/weights', { kilograms });
+    if (result.error) throw new Error(result.error);
+    appState = result;
+    render();
+    logAction('Записан вес', `${kilograms} кг`);
+  } catch (e) {
+    appState = prevState;
+    toast('Не удалось сохранить — обновляю данные…');
+    loadState();
+  }
 }
 
 // ---------- Профиль ----------
