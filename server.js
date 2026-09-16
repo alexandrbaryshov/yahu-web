@@ -17,7 +17,7 @@ const { URL } = require('url');
 const { sendJSON, readBody, serveStatic } = require('./lib/http-utils');
 const { getMotivationalPhrase } = require('./lib/motivational');
 const { createDishesRepository } = require('./lib/dishes');
-const { createStore, normalizeReminder, isSameDay, sumToday, DAILY_TARGETS, DEV_LOG_LIMIT } = require('./lib/store');
+const { createStore, normalizeReminder, isSameDay, sumToday, sumTodayMulti, DAILY_TARGETS, DEV_LOG_LIMIT } = require('./lib/store');
 const { processAchievements, getAchievementsView } = require('./lib/achievements');
 const { buildMacroTip } = require('./lib/macro-tip');
 const { syncStoreWithUpstash, getStatus: getUpstashStatus } = require('./lib/remote-sync');
@@ -50,16 +50,13 @@ function computeDerived() {
 
   // Подводим итоги по завершённым дням/неделям (ежедневные задания,
   // еженедельные награды, главная цель) перед каждым ответом клиенту.
-  // Идемпотентно — лишний вызов ничего не пересчитает повторно, но раз
-  // именно тут состояние может измениться при обычном GET (без отдельного
-  // мутирующего эндпоинта), сохраняем на диск прямо здесь.
-  processAchievements(state);
-  store.save();
+  // Идемпотентно — лишний вызов ничего не пересчитает повторно. Сохраняем
+  // на диск/в Upstash ТОЛЬКО если что-то реально изменилось — иначе обычный
+  // GET (например, при каждой загрузке страницы) впустую писал бы на диск
+  // и слал сетевой запрос в Upstash, хотя данные не поменялись.
+  if (processAchievements(state)) store.save();
 
-  const todayCalories = sumToday(state.foods, 'calories');
-  const todayProtein = sumToday(state.foods, 'protein');
-  const todayFat = sumToday(state.foods, 'fat');
-  const todayCarbs = sumToday(state.foods, 'carbs');
+  const { calories: todayCalories, protein: todayProtein, fat: todayFat, carbs: todayCarbs } = sumTodayMulti(state.foods, ['calories', 'protein', 'fat', 'carbs']);
   const todayWater = sumToday(state.water, 'amount');
 
   const sortedWeights = [...state.weights].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -132,20 +129,20 @@ const server = http.createServer(async (req, res) => {
   try {
     // ---- API: состояние приложения ----
     if (pathname === '/api/state' && req.method === 'GET') {
-      return sendJSON(res, 200, computeDerived());
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: автодополнение по собственной базе блюд (dishes.xlsx) ----
     if (pathname === '/api/dishes/search' && req.method === 'GET') {
       const query = parsed.searchParams.get('query') || '';
-      return sendJSON(res, 200, { dishes: dishes.search(query) });
+      return sendJSON(req, res, 200, { dishes: dishes.search(query) });
     }
 
     // ---- API: добавить еду ----
     if (pathname === '/api/foods' && req.method === 'POST') {
       const body = await readBody(req);
       const parsed = parseFoodInput(body);
-      if (parsed.error) return sendJSON(res, 400, { error: parsed.error });
+      if (parsed.error) return sendJSON(req, res, 400, { error: parsed.error });
       const { name, calories, protein, fat, carbs, grams } = parsed;
 
       const now = new Date().toISOString();
@@ -158,7 +155,8 @@ const server = http.createServer(async (req, res) => {
       // удалить/пересчитать при последующем редактировании или удалении еды.
       syncFoodWater(state, foodId, name, grams, now);
 
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: отредактировать существующую запись еды ----
@@ -170,16 +168,17 @@ const server = http.createServer(async (req, res) => {
       const id = pathname.split('/').pop();
       const existing = state.foods.find((f) => f.id === id);
       if (!existing) {
-        return sendJSON(res, 404, { error: 'Запись не найдена' });
+        return sendJSON(req, res, 404, { error: 'Запись не найдена' });
       }
       const body = await readBody(req);
       const parsed = parseFoodInput(body);
-      if (parsed.error) return sendJSON(res, 400, { error: parsed.error });
+      if (parsed.error) return sendJSON(req, res, 400, { error: parsed.error });
       Object.assign(existing, parsed); // date и id не трогаем — это правка, а не новая запись
 
       syncFoodWater(state, id, existing.name, existing.grams, existing.date);
 
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: удалить еду ----
@@ -189,7 +188,8 @@ const server = http.createServer(async (req, res) => {
       // Убираем и связанную запись воды, если это блюдо было отмечено как вода —
       // иначе после удаления еды выпитая вода "оставалась бы" в сумме за день.
       state.water = state.water.filter((w) => w.foodId !== id);
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: записать вес (одна запись в день, перезаписывает сегодняшнюю) ----
@@ -197,12 +197,13 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const kilograms = Number(body.kilograms);
       if (!Number.isFinite(kilograms) || kilograms <= 0) {
-        return sendJSON(res, 400, { error: 'Некорректный вес' });
+        return sendJSON(req, res, 400, { error: 'Некорректный вес' });
       }
       const today = new Date().toISOString();
       state.weights = state.weights.filter((w) => !isSameDay(w.date, today));
       state.weights.push({ id: crypto.randomUUID(), kilograms, date: today });
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: добавить воду напрямую (кнопка «Стакан воды», по умолчанию 250 мл) ----
@@ -210,10 +211,11 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const amount = Math.round(Number(body.amount) || 250);
       if (!Number.isFinite(amount) || amount <= 0 || amount > 2000) {
-        return sendJSON(res, 400, { error: 'Некорректный объём воды' });
+        return sendJSON(req, res, 400, { error: 'Некорректный объём воды' });
       }
       state.water.push({ id: crypto.randomUUID(), amount, date: new Date().toISOString(), source: 'quick' });
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: отменить последнюю сегодняшнюю запись воды (на случай случайного нажатия) ----
@@ -224,7 +226,8 @@ const server = http.createServer(async (req, res) => {
         const last = todayEntries[todayEntries.length - 1];
         state.water = state.water.filter((w) => w.id !== last.id);
       }
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: сохранить текстовые поля профиля ----
@@ -245,7 +248,8 @@ const server = http.createServer(async (req, res) => {
       // в разделе «Награды».
       if (targetWeight != null) state.goalWeight = targetWeight;
 
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: загрузить/заменить фото профиля (jpeg/png, ≤5 МБ, приходит как data URL) ----
@@ -254,21 +258,23 @@ const server = http.createServer(async (req, res) => {
       const dataUrl = String(body.dataUrl || '');
       const match = dataUrl.match(/^data:(image\/jpeg|image\/png);base64,([A-Za-z0-9+/=]+)$/);
       if (!match) {
-        return sendJSON(res, 400, { error: 'Допустимы только файлы JPEG или PNG' });
+        return sendJSON(req, res, 400, { error: 'Допустимы только файлы JPEG или PNG' });
       }
       const base64 = match[2];
       const approxBytes = Math.floor(base64.length * 3 / 4);
       if (approxBytes > 5 * 1024 * 1024) {
-        return sendJSON(res, 400, { error: 'Файл больше 5 МБ' });
+        return sendJSON(req, res, 400, { error: 'Файл больше 5 МБ' });
       }
       state.profile = { ...state.profile, photoDataUrl: dataUrl };
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: удалить фото профиля ----
     if (pathname === '/api/profile/photo' && req.method === 'DELETE') {
       state.profile = { ...state.profile, photoDataUrl: null };
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: сохранить настройки напоминаний (вода / разминка, независимо друг от друга) ----
@@ -278,7 +284,8 @@ const server = http.createServer(async (req, res) => {
         water: normalizeReminder(body.water, state.reminders.water),
         stretch: normalizeReminder(body.stretch, state.reminders.stretch),
       };
-      return sendJSON(res, 200, computeDerived());
+      store.save();
+      return sendJSON(req, res, 200, computeDerived());
     }
 
     // ---- API: статус хранилища (диагностика "засыпающего" хостинга) ----
@@ -286,7 +293,7 @@ const server = http.createServer(async (req, res) => {
     // увидеть, подключён ли Upstash и когда последний раз успешно
     // синхронизировался, не копаясь в логах хостинга.
     if (pathname === '/api/health' && req.method === 'GET') {
-      return sendJSON(res, 200, {
+      return sendJSON(req, res, 200, {
         ok: true,
         localRecordsCount: state.foods.length + state.weights.length + state.water.length,
         upstash: getUpstashStatus(),
@@ -305,37 +312,37 @@ const server = http.createServer(async (req, res) => {
       state.devLog.push({ id: crypto.randomUUID(), ts: new Date().toISOString(), action: ok ? 'Вход в инструмент разработчика' : 'Неудачная попытка входа в инструмент разработчика', details: '' });
       if (state.devLog.length > DEV_LOG_LIMIT) state.devLog = state.devLog.slice(-DEV_LOG_LIMIT);
       store.save();
-      return sendJSON(res, ok ? 200 : 401, { ok });
+      return sendJSON(req, res, ok ? 200 : 401, { ok });
     }
 
     if (pathname === '/api/devlog' && req.method === 'GET') {
-      return sendJSON(res, 200, { entries: [...state.devLog].reverse() }); // новые сверху
+      return sendJSON(req, res, 200, { entries: [...state.devLog].reverse() }); // новые сверху
     }
 
     if (pathname === '/api/devlog' && req.method === 'POST') {
       const body = await readBody(req);
       const action = String(body.action || '').trim().slice(0, 200);
-      if (!action) return sendJSON(res, 400, { error: 'Не указано действие' });
+      if (!action) return sendJSON(req, res, 400, { error: 'Не указано действие' });
       const details = String(body.details || '').trim().slice(0, 500);
       state.devLog.push({ id: crypto.randomUUID(), ts: new Date().toISOString(), action, details });
       if (state.devLog.length > DEV_LOG_LIMIT) state.devLog = state.devLog.slice(-DEV_LOG_LIMIT);
       store.save();
-      return sendJSON(res, 200, { ok: true });
+      return sendJSON(req, res, 200, { ok: true });
     }
 
     if (pathname === '/api/devlog' && req.method === 'DELETE') {
       state.devLog = [];
       store.save();
-      return sendJSON(res, 200, { ok: true });
+      return sendJSON(req, res, 200, { ok: true });
     }
 
     // ---- Статика ----
-    if (req.method === 'GET') return serveStatic(PUBLIC_DIR, res, pathname);
+    if (req.method === 'GET') return serveStatic(PUBLIC_DIR, req, res, pathname);
 
     res.writeHead(405); return res.end('Method not allowed');
   } catch (err) {
     console.error(err);
-    return sendJSON(res, 500, { error: 'Внутренняя ошибка сервера' });
+    return sendJSON(req, res, 500, { error: 'Внутренняя ошибка сервера' });
   }
 });
 
