@@ -6,6 +6,12 @@
 <meta name="theme-color" content="#237654">
 <title>ЯХУ — я худею</title>
 
+<!-- Тег <script> лежит в конце документа (после всего HTML/CSS) — без этой
+     подсказки браузер узнал бы про app.js, только дойдя до конца разбора.
+     Preload запускает загрузку сразу и параллельно с разбором остального
+     документа, экономя время, эквивалентное ещё одному сетевому ожиданию. -->
+<link rel="preload" href="/app.js" as="script" fetchpriority="high">
+
 <!-- PWA: делает возможной установку на главный экран iPhone/Android через браузер -->
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32">

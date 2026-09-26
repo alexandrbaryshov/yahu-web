@@ -96,6 +96,12 @@ function showScreen(name) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
   document.querySelectorAll('.nav button').forEach((b) => b.classList.toggle('active', b.dataset.screen === name));
+  // "Тяжёлые" экраны (см. render() выше) достраиваются лениво: если их
+  // пропустили, пока были не видны, — досчитываем именно сейчас, в момент,
+  // когда они вот-вот станут видимыми, а не заранее вхолостую.
+  if (name === 'diary' && diaryDirty) { renderDiary(); diaryDirty = false; }
+  else if (name === 'progress' && progressDirty) { renderProgress(); progressDirty = false; }
+  else if (name === 'achievements' && achievementsDirty) { renderAchievements(); achievementsDirty = false; }
   if (name !== 'devtools') logAction('Переход в раздел', SCREEN_LABELS[name] || name);
 }
 
@@ -163,16 +169,35 @@ async function loadState() {
   }
 }
 
+// Дневник/Прогресс/Награды строят списки и графики через innerHTML — это
+// самая "тяжёлая" часть рендера. Раньше render() перестраивал их ПОСЛЕ
+// КАЖДОГО действия в приложении, даже если пользователь смотрит только на
+// Главный экран (то есть проделывал работу, результат которой никто не
+// видит). Теперь: если экран сейчас виден — перерисовываем сразу (нужно для
+// корректности), если нет — просто помечаем "устаревшим" и достраиваем один
+// раз при переходе на него (см. showScreen()).
+let diaryDirty = true;
+let progressDirty = true;
+let achievementsDirty = true;
+
+function isScreenActive(id) {
+  const el = document.getElementById('screen-' + id);
+  return !!el && el.classList.contains('active');
+}
+function refreshDiary() { if (isScreenActive('diary')) { renderDiary(); diaryDirty = false; } else diaryDirty = true; }
+function refreshProgress() { if (isScreenActive('progress')) { renderProgress(); progressDirty = false; } else progressDirty = true; }
+function refreshAchievements() { if (isScreenActive('achievements')) { renderAchievements(); achievementsDirty = false; } else achievementsDirty = true; }
+
 function render() {
   if (!appState) return;
   cacheState(appState);
   renderHome();
   renderMacroTip();
-  renderDiary();
-  renderProgress();
-  renderAchievements();
-  renderProfile();
-  renderReminders();
+  renderProfile();   // недорого — просто обновляет аватар, который есть на каждом экране
+  renderReminders(); // должен работать в фоне независимо от того, какой экран сейчас виден
+  refreshDiary();
+  refreshProgress();
+  refreshAchievements();
 }
 
 // ---------- Главная: мотивационная фраза + калории + дашборд Б/Ж/У + вода ----------
@@ -248,7 +273,7 @@ async function addWaterQuick() {
     if (result.error) throw new Error(result.error);
     appState = result;
     renderWater();
-    renderAchievements(); // мог засчитаться "Выпита норма воды"
+    refreshAchievements(); // мог засчитаться "Выпита норма воды" — перерисуем, если этот экран сейчас виден
     const left = appState.waterRemaining;
     toast(left > 0 ? `💧 +250 мл, осталось ${left} мл` : '💧 Норма воды выполнена!');
     logAction('Добавлена вода', '+250 мл (быстрое действие)');
@@ -865,7 +890,7 @@ function fireReminder(kind) {
 async function saveReminders() {
   appState = await api.post('/api/reminders', appState.reminders);
   renderReminders();
-  renderAchievements();
+  refreshAchievements(); // от напоминаний зависит веха "Забота о себе"
 }
 
 function toggleReminderKind(kind) {
