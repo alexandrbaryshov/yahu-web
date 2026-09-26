@@ -25,6 +25,17 @@ function moscowParts(d) {
   return { year: s.getUTCFullYear(), month: s.getUTCMonth(), day: s.getUTCDate() };
 }
 
+// Показывает сегодняшнюю дату по московскому времени рядом с заголовком
+// "Сегодня" на главном экране — по просьбе пользователя, чтобы всегда было
+// видно, на какой день сейчас показаны данные (и сразу заметно, если
+// вкладка была открыта всю ночь и её пора обновить вручную).
+function renderTodayDate() {
+  const el = document.getElementById('todayDateLabel');
+  if (!el) return;
+  const label = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' });
+  el.textContent = label;
+}
+
 function startOfDay(d) {
   const p = moscowParts(d);
   return new Date(Date.UTC(p.year, p.month, p.day) - MOSCOW_OFFSET_MS);
@@ -144,7 +155,11 @@ async function loadState() {
     wasOverBudget = appState.isOverBudget;
     render();
   } catch (e) {
-    if (!cached) toast('Не удалось связаться с сервером');
+    // ВАЖНО: предупреждаем и тогда, когда есть кэш — иначе, если сеть
+    // недоступна (или сервер "просыпается"), пользователь молча застревает
+    // на вчерашнем снимке из кэша и даже не подозревает, что видит не
+    // актуальные данные.
+    toast(cached ? '⚠️ Не удалось обновить данные — возможно, показано вчерашнее' : 'Не удалось связаться с сервером');
   }
 }
 
@@ -162,6 +177,7 @@ function render() {
 
 // ---------- Главная: мотивационная фраза + калории + дашборд Б/Ж/У + вода ----------
 function renderHome() {
+  renderTodayDate();
   const {
     lastWeight, goalWeight, startWeight, todayCalories, dailyTarget,
     todayProtein, todayFat, todayCarbs, proteinTarget, fatTarget, carbsTarget, isOverBudget,
@@ -1293,6 +1309,28 @@ async function removePhoto() {
 }
 
 loadState();
+
+// ---------- Автообновление данных ровно в полночь по МСК ----------
+// Без этого, если вкладка/PWA была открыта всю ночь без перезагрузки,
+// дашборд продолжал бы показывать вчерашние цифры до тех пор, пока
+// пользователь не обновит страницу вручную — день на сервере уже наступил
+// новый, а на экране всё ещё "вчера", просто потому что клиент ничего не
+// перезапрашивал. Планируем один setTimeout ровно на ближайшую полночь по
+// Europe/Moscow, а после срабатывания — планируем следующий (на сутки вперёд).
+function scheduleMidnightRefresh() {
+  const now = new Date();
+  const parts = moscowParts(now);
+  // Полночь (00:00:00.000) СЛЕДУЮЩИХ суток по московскому времени, тем же
+  // приёмом сдвига, что и остальные даты в этом файле (см. moscowParts выше).
+  const nextMidnightMoscow = new Date(Date.UTC(parts.year, parts.month, parts.day + 1) - MOSCOW_OFFSET_MS);
+  const delay = nextMidnightMoscow.getTime() - now.getTime();
+  setTimeout(() => {
+    loadState();
+    logAction('Автообновление данных', 'Наступила полночь по МСК');
+    scheduleMidnightRefresh(); // на следующие сутки
+  }, delay + 1000); // +1с с запасом, чтобы сервер уже точно перешёл на новый день
+}
+scheduleMidnightRefresh();
 
 // ---------- Инструмент разработчика (журнал действий пользователя) ----------
 function openDevToolsAuth() {
