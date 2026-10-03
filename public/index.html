@@ -143,6 +143,42 @@
   .splash-error { margin-top:22px; }
   .splash-error p { margin:0 0 12px; color:var(--danger); font-size:13.5px; font-weight:700; }
   .splash-error button { border:0; background:var(--accent); color:#fff; font-size:14px; font-weight:700; padding:11px 22px; border-radius:12px; cursor:pointer; }
+
+  /* Весы на заставке: стрелка доходит до цели (63 кг) с лёгким «перелётом»,
+     как у настоящих весов, и на цели шкала загорается золотом. Длительность
+     подобрана под минимальное время заставки (3,5 с): стрелка встаёт на место
+     к ~2,5 с, ещё около секунды видно свечение. */
+  .scale { width:200px; margin:0 auto 22px; }
+  .scale svg { display:block; width:100%; height:auto; overflow:visible; transition:filter .6s ease; }
+  .scale-arc { fill:none; stroke:#cfdcd4; stroke-width:6; stroke-linecap:round; }
+  .scale-tick { stroke:#9fb2a8; stroke-width:2; stroke-linecap:round; }
+  .scale-tick.major { stroke:var(--muted); stroke-width:2.5; }
+  .scale-label { font-size:11px; font-weight:700; fill:var(--muted); text-anchor:middle; dominant-baseline:middle; }
+  .scale-target { stroke:#d9a520; stroke-width:3.5; stroke-linecap:round; }
+  .scale-needle { transform-origin:100px 100px; transform:rotate(-90deg); animation:scale-needle 2.2s cubic-bezier(.33,.0,.2,1) .3s forwards; }
+  .scale-needle line { stroke:var(--ink); stroke-width:3; stroke-linecap:round; transition:stroke .6s ease; }
+  .scale-hub { fill:var(--ink); transition:fill .6s ease; }
+  .scale-readout { margin-top:6px; font-size:22px; font-weight:800; color:var(--ink); font-variant-numeric:tabular-nums; transition:color .6s ease, text-shadow .6s ease; }
+  .scale-readout small { font-size:13px; font-weight:700; color:var(--muted); margin-left:3px; }
+  .scale.reached svg { filter:drop-shadow(0 0 6px rgba(240,190,60,.85)) drop-shadow(0 0 14px rgba(240,190,60,.45)); animation:scale-glow 1.6s ease-in-out infinite alternate; }
+  .scale.reached .scale-needle line { stroke:#c8921a; }
+  .scale.reached .scale-hub { fill:#c8921a; }
+  .scale.reached .scale-readout { color:#b8860b; text-shadow:0 0 10px rgba(240,190,60,.7); }
+  /* 63 кг на шкале 0–120 кг (−90°…+90°) — это 4,5°. */
+  @keyframes scale-needle {
+    0%   { transform:rotate(-90deg); }
+    70%  { transform:rotate(13deg); }
+    85%  { transform:rotate(1.5deg); }
+    100% { transform:rotate(4.5deg); }
+  }
+  @keyframes scale-glow {
+    from { filter:drop-shadow(0 0 5px rgba(240,190,60,.75)) drop-shadow(0 0 10px rgba(240,190,60,.35)); }
+    to   { filter:drop-shadow(0 0 9px rgba(240,190,60,.95)) drop-shadow(0 0 20px rgba(240,190,60,.55)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scale-needle { animation:none; transform:rotate(4.5deg); }
+    .scale.reached svg { animation:none; }
+  }
   .section h2 { font-size:17px; }
   .link { border:0; background:none; color:var(--accent); font-weight:700; font-size:13px; padding:4px; }
 
@@ -342,6 +378,35 @@
 <div class="splash" id="splash" role="status" aria-live="polite" onclick="if (window.yahuSplashTap) yahuSplashTap()">
   <div class="splash-inner">
     <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+    <div class="scale" id="splashScale" aria-hidden="true">
+      <svg viewBox="0 0 200 112">
+        <path class="scale-arc" d="M20 100 A80 80 0 0 1 180 100"/>
+        <!-- Риски каждые 10 кг (15°), крупные — каждые 30 кг -->
+        <line class="scale-tick major" x1="100" y1="24" x2="100" y2="34" transform="rotate(-90 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(-75 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(-60 100 100)"/>
+        <line class="scale-tick major" x1="100" y1="24" x2="100" y2="34" transform="rotate(-45 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(-30 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(-15 100 100)"/>
+        <line class="scale-tick major" x1="100" y1="24" x2="100" y2="34" transform="rotate(0 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(15 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(30 100 100)"/>
+        <line class="scale-tick major" x1="100" y1="24" x2="100" y2="34" transform="rotate(45 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(60 100 100)"/>
+        <line class="scale-tick" x1="100" y1="24" x2="100" y2="30" transform="rotate(75 100 100)"/>
+        <line class="scale-tick major" x1="100" y1="24" x2="100" y2="34" transform="rotate(90 100 100)"/>
+        <!-- Цель — 63 кг -->
+        <line class="scale-target" x1="100" y1="18" x2="100" y2="30" transform="rotate(4.5 100 100)"/>
+        <text class="scale-label" x="44" y="100">0</text>
+        <text class="scale-label" x="60.4" y="60.4">30</text>
+        <text class="scale-label" x="100" y="44">60</text>
+        <text class="scale-label" x="139.6" y="60.4">90</text>
+        <text class="scale-label" x="156" y="100">120</text>
+        <g class="scale-needle" id="splashNeedle"><line x1="100" y1="100" x2="100" y2="30"/></g>
+        <circle class="scale-hub" cx="100" cy="100" r="6"/>
+      </svg>
+      <div class="scale-readout"><span id="splashKg">0,0</span><small>кг</small></div>
+    </div>
     <p class="splash-phrase" id="splashPhrase">Хорошего дня!</p>
     <p class="splash-hint" id="splashHint" hidden>Сервер просыпается — это может занять до минуты</p>
     <div class="splash-error" id="splashError" hidden>
@@ -376,6 +441,39 @@
       if (document.readyState === 'complete') hideUncontrolled();
     };
     setTimeout(hideUncontrolled, SPLASH_FAILSAFE_MS);
+  })();
+</script>
+<script>
+  // Весы на заставке: цифры под стрелкой берутся из её текущего угла (а не
+  // считаются отдельно), поэтому всегда совпадают с тем, куда она показывает,
+  // включая «перелёт». Когда анимация стрелки закончилась — золотое свечение.
+  (function () {
+    var TARGET_KG = 63, MAX_KG = 120;
+    var scale = document.getElementById('splashScale');
+    var needle = document.getElementById('splashNeedle');
+    var kg = document.getElementById('splashKg');
+    var splash = document.getElementById('splash');
+    if (!scale || !needle || !kg) return;
+    function show(value) { kg.textContent = value.toFixed(1).replace('.', ','); }
+    function reach() { show(TARGET_KG); scale.className += ' reached'; }
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Заставку на этот раз не показываем (F5 в той же вкладке) — не тратим кадры.
+    if (reduced || /(^|\s)gone(\s|$)/.test(splash.className)) { reach(); return; }
+    var done = false;
+    function tick() {
+      if (done) return;
+      var m = getComputedStyle(needle).transform;
+      var parts = m && m !== 'none' ? m.slice(m.indexOf('(') + 1, -1).split(',') : null;
+      if (parts) {
+        var deg = Math.atan2(parseFloat(parts[1]), parseFloat(parts[0])) * 180 / Math.PI;
+        show(Math.max(0, (deg + 90) / 180 * MAX_KG));
+      }
+      requestAnimationFrame(tick);
+    }
+    needle.addEventListener('animationend', function () { done = true; reach(); });
+    // Подстраховка, если animationend не придёт (вкладка в фоне и т.п.).
+    setTimeout(function () { if (!done) { done = true; reach(); } }, 2800);
+    requestAnimationFrame(tick);
   })();
 </script>
 <!-- Индикатор жеста "потянуть вниз, чтобы обновить" — вне .phone, чтобы
