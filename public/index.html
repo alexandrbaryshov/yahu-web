@@ -12,6 +12,11 @@
      документа, экономя время, эквивалентное ещё одному сетевому ожиданию. -->
 <link rel="preload" href="/app.js" as="script" fetchpriority="high">
 
+<!-- Крошечные скрипты без DOM: фраза дня (общая с сервером) и решения старта.
+     Нужны заставке ещё до загрузки app.js, поэтому подключены здесь, в <head>. -->
+<script src="/today.js"></script>
+<script src="/startup.js"></script>
+
 <!-- PWA: делает возможной установку на главный экран iPhone/Android через браузер -->
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
@@ -115,6 +120,29 @@
 
   .section { display:flex; justify-content:space-between; align-items:center; margin:24px 2px 12px; }
   .today-date { font-size:12.5px; font-weight:700; color:var(--muted); }
+  .today-meta { display:flex; align-items:center; gap:8px; }
+  /* Индикатор свежести данных главной (см. setSyncStatus в app.js) */
+  .sync-status { font-size:11.5px; font-weight:700; color:var(--accent-dark); background:var(--mint); border-radius:10px; padding:3px 9px; white-space:nowrap; }
+  .sync-status.offline { color:var(--danger); background:#fdf1ee; }
+  /* Пока нет свежего ответа сервера, цифры главной приглушены — чтобы
+     данные из снимка не принимались за актуальные. */
+  #screen-home .goal, #screen-home .calories, #screen-home .water-card, #screen-home .over-budget-banner { transition:opacity .3s ease; }
+  #screen-home.stale .goal, #screen-home.stale .calories, #screen-home.stale .water-card, #screen-home.stale .over-budget-banner { opacity:.5; }
+
+  /* Заставка со слоганом дня — поверх всего, видна с первой отрисовки. */
+  .splash {
+    position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center;
+    background:var(--soft); padding:32px 28px; text-align:center; transition:opacity .4s ease;
+  }
+  .splash.leaving { opacity:0; pointer-events:none; }
+  .splash.gone { display:none; }
+  .splash-inner { max-width:380px; animation: fade .6s ease; }
+  .splash .brand { margin:0 0 22px; }
+  .splash-phrase { margin:0; font-size:21px; line-height:1.45; font-weight:700; color:var(--ink); }
+  .splash-hint { margin:22px 0 0; font-size:13px; color:var(--muted); line-height:1.4; }
+  .splash-error { margin-top:22px; }
+  .splash-error p { margin:0 0 12px; color:var(--danger); font-size:13.5px; font-weight:700; }
+  .splash-error button { border:0; background:var(--accent); color:#fff; font-size:14px; font-weight:700; padding:11px 22px; border-radius:12px; cursor:pointer; }
   .section h2 { font-size:17px; }
   .link { border:0; background:none; color:var(--accent); font-weight:700; font-size:13px; padding:4px; }
 
@@ -308,13 +336,36 @@
 </style>
 </head>
 <body>
+<!-- Заставка со слоганом дня. Видна сразу (до загрузки app.js); прячет её
+     app.js (см. updateSplash). Клик по ней закрывает, если уже есть что показать. -->
+<div class="splash" id="splash" role="status" aria-live="polite" onclick="if (window.dismissSplash) dismissSplash()">
+  <div class="splash-inner">
+    <div class="brand">ЯХУ · Я ХУДЕЮ</div>
+    <p class="splash-phrase" id="splashPhrase">Хорошего дня!</p>
+    <p class="splash-hint" id="splashHint" hidden>Сервер просыпается — это может занять до минуты</p>
+    <div class="splash-error" id="splashError" hidden>
+      <p>Не удалось связаться с сервером</p>
+      <button type="button" onclick="event.stopPropagation(); retryInitialLoad()">Повторить</button>
+    </div>
+  </div>
+</div>
+<script>
+  // Фраза дня — той же функцией, что на сервере, сразу при разборе страницы.
+  // Повторная загрузка в той же вкладке (F5, pull-to-refresh) — без заставки,
+  // если есть снимок: сразу главная.
+  (function () {
+    var splash = document.getElementById('splash');
+    try { document.getElementById('splashPhrase').textContent = window.YahuToday.getMotivationalPhrase(); } catch (e) {}
+    try { if (window.YahuStartup.shouldSkipSplash(sessionStorage, localStorage)) splash.className += ' gone'; } catch (e) {}
+  })();
+</script>
 <!-- Индикатор жеста "потянуть вниз, чтобы обновить" — вне .phone, чтобы
      позиционироваться относительно всего окна, а не прокручиваемого контента. -->
 <div class="pull-refresh" id="pullToRefresh"><span id="pullRefreshIcon">↻</span></div>
 <main class="phone">
 
   <!-- ГЛАВНАЯ -->
-  <section class="screen active" id="screen-home">
+  <section class="screen active stale" id="screen-home">
     <div class="screen-header">
       <div class="brand">ЯХУ · Я ХУДЕЮ</div>
       <button class="avatar" data-profile-btn onclick="showScreen('profile')" aria-label="Профиль">🌿</button>
@@ -326,7 +377,7 @@
       <div class="bar"><i id="goalBar" style="width:0%"></i></div>
       <footer id="goalFooter"></footer>
     </section>
-    <div class="section today-section-head"><h2>Сегодня</h2><span id="todayDateLabel" class="today-date"></span></div>
+    <div class="section today-section-head"><h2>Сегодня</h2><span class="today-meta"><span id="syncStatus" class="sync-status" hidden></span><span id="todayDateLabel" class="today-date"></span></span></div>
     <div id="overBudgetBanner" class="over-budget-banner">
       <span class="ico">⚠️</span>
       <div><b>Вы сегодня переели!</b><p>Дневная норма калорий превышена — завтра будет новый день.</p></div>

@@ -9,8 +9,8 @@
 // старую версию оболочки из кэша (это штатное поведение stale-while-revalidate
 // ниже: старая версия показывается мгновенно, а свежая тихо подгружается на
 // следующий раз).
-const CACHE_NAME = 'yahu-shell-v2';
-const SHELL_FILES = ['/', '/app.js', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png'];
+const CACHE_NAME = 'yahu-shell-v3';
+const SHELL_FILES = ['/', '/app.js', '/today.js', '/startup.js','/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

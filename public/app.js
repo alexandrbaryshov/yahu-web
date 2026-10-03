@@ -126,48 +126,171 @@ function toast(text) {
 // только они приходят (классический паттерн stale-while-revalidate). Именно
 // это убирает заметную паузу в 1.5-2 секунды при каждом F5/pull-to-refresh —
 // пользователь не смотрит на пустой экран, пока идёт сетевой запрос.
-const STATE_CACHE_KEY = 'yahu:lastState:v1';
+//
+// Снимок хранится под 'yahu:lastState:v2' вместе со временем сохранения (см.
+// public/startup.js — там же разовый перенос старого ключа v1). Цифры
+// «сегодня» из снимка перед показом пересчитываются по московским суткам
+// (applyLocalToday), иначе утром на главной висели бы вчерашние.
+const Startup = window.YahuStartup;
+
+// Свежесть данных на экране: 'syncing' — ждём сервер, 'fresh' — показан
+// свежий ответ, 'offline' — сервер не ответил, показан снимок.
+let syncStatus = 'syncing';
+let snapshotSavedAt = null;   // когда сохранён показанный снимок (для «данные на HH:MM»)
+let lastFreshAt = 0;          // время последнего успешного /api/state (для перезапроса при возврате)
+let stateRequest = null;      // текущий запрос /api/state — повторные вызовы к нему присоединяются
+
+// Копия снимка с цифрами «сегодня», фразой дня и без устаревшей подсказки
+// Б/Ж/У — расчёт в public/startup.js (там же тесты).
+function applyLocalToday(state, now) {
+  return Startup.applyLocalToday(state, now || new Date());
+}
 
 function cacheState(state) {
-  try {
-    // Фото профиля может весить несколько мегабайт в base64 — кэшировать его
-    // на каждый рендер бессмысленно (не нужно для "мгновенных цифр" на
-    // главном экране) и рискованно для лимита localStorage (обычно 5-10 МБ).
-    const toCache = { ...state, profile: { ...state.profile, photoDataUrl: null } };
-    localStorage.setItem(STATE_CACHE_KEY, JSON.stringify(toCache));
-  } catch (e) { /* приватный режим браузера, переполнение квоты и т.п. — не критично */ }
+  // В снимок кладём только данные сервера: пока свежего ответа нет, на
+  // экране пересчитанная копия старого снимка — переписывать ей снимок
+  // (и его время) нельзя, иначе «данные на HH:MM» соврут.
+  if (syncStatus !== 'fresh') return;
+  Startup.writeSnapshot(localStorage, state, new Date());
 }
 
-function readCachedState() {
-  try {
-    const raw = localStorage.getItem(STATE_CACHE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) { return null; }
+function setSyncStatus(status) {
+  syncStatus = status;
+  const el = document.getElementById('syncStatus');
+  const home = document.getElementById('screen-home');
+  if (home) home.classList.toggle('stale', status !== 'fresh');
+  if (!el) return;
+  el.classList.toggle('offline', status === 'offline');
+  if (status === 'fresh') { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = status === 'syncing' ? 'Обновляю…' : Startup.offlineLabel(snapshotSavedAt);
+  el.hidden = false;
 }
 
-async function loadState() {
-  // 1) Мгновенно показываем последний известный снимок, если он есть —
-  // без этого шага экран был бы пустым все 1.5-2 секунды сетевого запроса.
-  const cached = readCachedState();
-  if (cached) {
-    appState = cached;
-    wasOverBudget = appState.isOverBudget;
-    render();
-  }
-  // 2) Догружаем актуальные данные с сервера и тихо обновляем экран —
-  // пользователь к этому моменту уже видит интерфейс и может им пользоваться.
-  try {
-    appState = await api.get('/api/state');
-    wasOverBudget = appState.isOverBudget;
-    render();
-  } catch (e) {
-    // ВАЖНО: предупреждаем и тогда, когда есть кэш — иначе, если сеть
-    // недоступна (или сервер "просыпается"), пользователь молча застревает
-    // на вчерашнем снимке из кэша и даже не подозревает, что видит не
-    // актуальные данные.
-    toast(cached ? '⚠️ Не удалось обновить данные — возможно, показано вчерашнее' : 'Не удалось связаться с сервером');
-  }
+// GET /api/state с таймаутом 60 с (Render просыпается до ~50 с). Ошибка
+// сервера ({error}) тоже считается неудачей — иначе отрисовали бы пустоту.
+function fetchState() {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => { if (ctrl) ctrl.abort(); }, Startup.FETCH_TIMEOUT_MS);
+  return fetch('/api/state', ctrl ? { signal: ctrl.signal } : undefined)
+    .then((r) => r.json().then((data) => {
+      if (!r.ok || !data || data.error) throw new Error((data && data.error) || 'HTTP ' + r.status);
+      return data;
+    }))
+    .finally(() => clearTimeout(timer));
 }
+
+// Перезапрос свежих данных с индикатором «Обновляю…» у даты. При неудаче
+// вместо прежнего toast — «Нет связи · данные на HH:MM».
+function loadState() {
+  if (stateRequest) return stateRequest;
+  setSyncStatus('syncing');
+  stateRequest = fetchState()
+    .then((fresh) => {
+      appState = fresh;
+      wasOverBudget = appState.isOverBudget;
+      lastFreshAt = Date.now();
+      splash.hasFresh = true;
+      splash.failed = false;
+      setSyncStatus('fresh');
+      snapshotSavedAt = new Date().toISOString();
+      render();
+    })
+    .catch(() => {
+      splash.failed = true;
+      setSyncStatus('offline');
+    })
+    .finally(() => {
+      stateRequest = null;
+      updateSplash();
+    });
+  return stateRequest;
+}
+
+// ---------- Заставка со слоганом дня ----------
+// Разметка и фраза — в index.html (видны до загрузки app.js). Здесь — только
+// когда её прятать; само решение — Startup.splashDecision (см. тесты).
+const splash = {
+  el: document.getElementById('splash'),
+  hasSnapshot: false,
+  hasFresh: false,
+  failed: false,
+  repeatVisit: false,
+  done: false,
+};
+
+// Время от начала загрузки страницы (а не от загрузки app.js).
+function elapsedSinceStart() {
+  return typeof performance !== 'undefined' && performance.now ? performance.now() : 0;
+}
+
+function hideSplash() {
+  if (splash.done) return;
+  splash.done = true;
+  Startup.markSplashShown(sessionStorage);
+  if (!splash.el) return;
+  splash.el.classList.add('leaving');
+  setTimeout(() => splash.el.classList.add('gone'), 400);
+}
+
+function updateSplash() {
+  if (splash.done) return;
+  const d = Startup.splashDecision({
+    elapsedMs: elapsedSinceStart(),
+    hasSnapshot: splash.hasSnapshot,
+    hasFresh: splash.hasFresh,
+    failed: splash.failed,
+    repeatVisit: splash.repeatVisit,
+  });
+  if (d.hide) { hideSplash(); return; }
+  document.getElementById('splashHint').hidden = !d.slowHint || d.showError;
+  document.getElementById('splashError').hidden = !d.showError;
+}
+
+// Тап по заставке закрывает её, только если уже есть что показать.
+function dismissSplash() {
+  if (Startup.canDismissSplash({ hasSnapshot: splash.hasSnapshot, hasFresh: splash.hasFresh })) hideSplash();
+}
+
+// Кнопка «Повторить» на заставке (первый вход без снимка, сервер не ответил).
+function retryInitialLoad() {
+  splash.failed = false;
+  updateSplash();
+  loadState();
+}
+
+// Старт: запрос к серверу уходит сразу, параллельно с заставкой; главная
+// под заставкой уже отрисована из снимка, пересчитанного на сегодня.
+function startApp() {
+  splash.repeatVisit = !!(splash.el && splash.el.classList.contains('gone'));
+  if (splash.repeatVisit) splash.done = true; // index.html уже убрал заставку (F5 в той же вкладке)
+  const snapshot = Startup.readSnapshot(localStorage);
+  loadState();
+  if (snapshot) {
+    try {
+      appState = applyLocalToday(snapshot.state, new Date());
+      snapshotSavedAt = snapshot.savedAt;
+      wasOverBudget = appState.isOverBudget; // не показывать «переели» toast из снимка
+      splash.hasSnapshot = true;
+      if (!splash.hasFresh) render();
+    } catch (e) { appState = null; /* испорченный снимок — ждём сервер */ }
+  }
+  updateSplash();
+  // Контрольные точки решения: минимум 3,5 с, предел 6 с (и подсказка «Сервер просыпается»).
+  [Startup.SPLASH_MIN_MS, Startup.SPLASH_MAX_WITH_SNAPSHOT_MS, Startup.SLOW_HINT_MS].forEach((ms) => {
+    setTimeout(updateSplash, Math.max(0, ms - elapsedSinceStart()) + 20);
+  });
+}
+
+// Возврат во вкладку/PWA из фона: если свежим данным больше минуты —
+// перезапрашиваем (данные могли поменяться на другом устройстве).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !appState || stateRequest) return;
+  if (!Startup.shouldRefreshOnVisible(Date.now(), lastFreshAt)) return;
+  // Пока ждём, «сегодня» на экране — по текущим московским суткам.
+  appState = applyLocalToday(appState, new Date());
+  loadState();
+  render();
+});
 
 // Дневник/Прогресс/Награды строят списки и графики через innerHTML — это
 // самая "тяжёлая" часть рендера. Раньше render() перестраивал их ПОСЛЕ
@@ -1217,9 +1340,14 @@ function renderProfile() {
   // Кнопка-аватар в правом верхнем углу каждого раздела: показываем фото,
   // если оно есть, иначе иконку-заглушку. Кнопка продублирована на всех
   // экранах (data-profile-btn), поэтому обновляем их все разом.
+  //
+  // Фото больше не приходит в ответе /api/state — только его версия; сама
+  // картинка грузится отдельным URL с версией и кэшируется браузером надолго
+  // (новое фото → новая версия → новый URL).
+  const photoUrl = p.photoVersion ? `/api/profile/photo?v=${encodeURIComponent(p.photoVersion)}` : null;
   document.querySelectorAll('[data-profile-btn]').forEach((avatarBtn) => {
-    if (p.photoDataUrl) {
-      avatarBtn.style.backgroundImage = `url("${p.photoDataUrl}")`;
+    if (photoUrl) {
+      avatarBtn.style.backgroundImage = `url("${photoUrl}")`;
       avatarBtn.textContent = '';
     } else {
       avatarBtn.style.backgroundImage = '';
@@ -1230,8 +1358,8 @@ function renderProfile() {
   // Фото в самом разделе профиля
   const photoPreview = document.getElementById('profilePhotoPreview');
   const removeBtn = document.getElementById('photoRemoveBtn');
-  if (p.photoDataUrl) {
-    photoPreview.style.backgroundImage = `url("${p.photoDataUrl}")`;
+  if (photoUrl) {
+    photoPreview.style.backgroundImage = `url("${photoUrl}")`;
     photoPreview.textContent = '';
     removeBtn.style.display = 'inline-block';
   } else {
@@ -1333,7 +1461,7 @@ async function removePhoto() {
   logAction('Удалено фото профиля');
 }
 
-loadState();
+startApp();
 
 // ---------- Автообновление данных ровно в полночь по МСК ----------
 // Без этого, если вкладка/PWA была открыта всю ночь без перезагрузки,
@@ -1350,7 +1478,11 @@ function scheduleMidnightRefresh() {
   const nextMidnightMoscow = new Date(Date.UTC(parts.year, parts.month, parts.day + 1) - MOSCOW_OFFSET_MS);
   const delay = nextMidnightMoscow.getTime() - now.getTime();
   setTimeout(() => {
+    // Сразу показываем «сегодня» за новые сутки, не дожидаясь сервера.
+    // loadState() первым: он ставит статус «Обновляю…», и render() не
+    // перезапишет снимок пересчитанной копией.
     loadState();
+    if (appState) { appState = applyLocalToday(appState, new Date()); render(); }
     logAction('Автообновление данных', 'Наступила полночь по МСК');
     scheduleMidnightRefresh(); // на следующие сутки
   }, delay + 1000); // +1с с запасом, чтобы сервер уже точно перешёл на новый день
