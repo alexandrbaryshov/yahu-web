@@ -337,8 +337,9 @@
 </head>
 <body>
 <!-- Заставка со слоганом дня. Видна сразу (до загрузки app.js); прячет её
-     app.js (см. updateSplash). Клик по ней закрывает, если уже есть что показать. -->
-<div class="splash" id="splash" role="status" aria-live="polite" onclick="if (window.dismissSplash) dismissSplash()">
+     app.js (см. updateSplash). Клик по ней закрывает, если уже есть что показать.
+     Если app.js её под контроль не взял — страховка в скрипте ниже. -->
+<div class="splash" id="splash" role="status" aria-live="polite" onclick="if (window.yahuSplashTap) yahuSplashTap()">
   <div class="splash-inner">
     <div class="brand">ЯХУ · Я ХУДЕЮ</div>
     <p class="splash-phrase" id="splashPhrase">Хорошего дня!</p>
@@ -357,6 +358,24 @@
     var splash = document.getElementById('splash');
     try { document.getElementById('splashPhrase').textContent = window.YahuToday.getMotivationalPhrase(); } catch (e) {}
     try { if (window.YahuStartup.shouldSkipSplash(sessionStorage, localStorage)) splash.className += ' gone'; } catch (e) {}
+
+    // Страховка: прячет заставку только app.js, а он может её «не знать»
+    // (старый app.js из кэша сервис-воркера при новом index.html) или упасть
+    // на старте (не загрузился startup.js). Тогда заставка поверх всего висела
+    // бы вечно. app.js в конце startApp() ставит window.yahuSplashControlled —
+    // без этой отметки заставка скрывается сама через 7 с или по тапу после
+    // загрузки страницы. Не зависит от today.js/startup.js — они могли не прийти.
+    var SPLASH_FAILSAFE_MS = 7000;
+    function hideUncontrolled() {
+      if (window.yahuSplashControlled || !splash) return;
+      if (!/(^|\s)gone(\s|$)/.test(splash.className)) splash.className += ' gone';
+    }
+    window.yahuSplashTap = function () {
+      if (window.yahuSplashControlled) { if (window.dismissSplash) window.dismissSplash(); return; }
+      // До конца загрузки app.js ещё может взять заставку — тап без данных ничего не делает.
+      if (document.readyState === 'complete') hideUncontrolled();
+    };
+    setTimeout(hideUncontrolled, SPLASH_FAILSAFE_MS);
   })();
 </script>
 <!-- Индикатор жеста "потянуть вниз, чтобы обновить" — вне .phone, чтобы

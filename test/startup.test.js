@@ -181,6 +181,79 @@ test('shouldRefreshOnVisible: больше 60 с с прошлой успешн�
   assert.strictEqual(startup.shouldRefreshOnVisible(100001, 40000), true);
 });
 
+// Номер версии данных (serverSeq) растёт на каждый применённый ответ сервера —
+// /api/state или мутации. Ответ /api/state, запрошенный при меньшем номере,
+// мог уйти до мутации и не содержать её.
+test('stateResponseAction: ответ /api/state применяется, только если с запроса ничего не применялось', () => {
+  assert.strictEqual(startup.stateResponseAction({ requestSeq: 4, currentSeq: 4, status: 'syncing' }), 'apply');
+  // Пока запрос летел, применился ответ мутации (статус fresh) — он новее, старый ответ выбрасываем.
+  assert.strictEqual(startup.stateResponseAction({ requestSeq: 4, currentSeq: 5, status: 'fresh' }), 'drop');
+  // Применился ответ мутации, но потом другая мутация не удалась (syncing) — нужен новый запрос.
+  assert.strictEqual(startup.stateResponseAction({ requestSeq: 4, currentSeq: 5, status: 'syncing' }), 'refetch');
+  assert.strictEqual(startup.stateResponseAction({ requestSeq: 4, currentSeq: 6, status: 'offline' }), 'refetch');
+});
+
+test('mutationFailureAction: откат только если с начала действия ничего свежего не пришло; статус всегда «Обновляю…»', () => {
+  assert.deepStrictEqual(startup.mutationFailureAction({ startSeq: 3, currentSeq: 3 }), { restore: true, status: 'syncing' });
+  // Пока мутация летела, пришёл свежий ответ — откат на prevState вернул бы более старые данные.
+  assert.deepStrictEqual(startup.mutationFailureAction({ startSeq: 3, currentSeq: 4 }), { restore: false, status: 'syncing' });
+});
+
+// Страховка заставки в самом index.html: если app.js не взял её под контроль
+// (старый app.js из кэша сервис-воркера, startup.js не загрузился, startApp
+// упал), она скрывается сама и по тапу.
+function runSplashInlineScript(opts) {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const start = html.indexOf('<script>', html.indexOf('id="splash"'));
+  const code = html.slice(start + '<script>'.length, html.indexOf('</script>', start));
+  const timers = [];
+  const splashEl = { className: 'splash' };
+  const els = { splash: splashEl, splashPhrase: { textContent: '' } };
+  const sandbox = {
+    document: { getElementById: (id) => els[id] || null, readyState: 'loading' },
+    sessionStorage: fakeStorage(), localStorage: fakeStorage(),
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+  };
+  sandbox.window = sandbox;
+  if (opts && opts.withStartup) {
+    vm.runInNewContext(fs.readFileSync(TODAY_FILE, 'utf8'), sandbox);
+    vm.runInNewContext(fs.readFileSync(STARTUP_FILE, 'utf8'), sandbox);
+  }
+  vm.runInNewContext(code, sandbox);
+  const runTimersUpTo = (ms) => timers.filter((t) => t.ms <= ms).forEach((t) => t.fn());
+  return { sandbox, splashEl, runTimersUpTo };
+}
+
+test('index.html: без app.js заставка скрывается сама не позже 8 с', () => {
+  const { splashEl, runTimersUpTo } = runSplashInlineScript({ withStartup: false });
+  assert.ok(!/\bgone\b/.test(splashEl.className));
+  runTimersUpTo(8000);
+  assert.ok(/\bgone\b/.test(splashEl.className), 'заставка не скрылась: ' + splashEl.className);
+});
+
+test('index.html: app.js взял заставку под контроль — страховка не вмешивается', () => {
+  const { sandbox, splashEl, runTimersUpTo } = runSplashInlineScript({ withStartup: true });
+  sandbox.yahuSplashControlled = true;
+  runTimersUpTo(60000);
+  assert.ok(!/\bgone\b/.test(splashEl.className));
+});
+
+test('index.html: тап по «бесхозной» заставке после загрузки страницы её скрывает', () => {
+  const { sandbox, splashEl } = runSplashInlineScript({ withStartup: true });
+  sandbox.document.readyState = 'complete';
+  sandbox.yahuSplashTap();
+  assert.ok(/\bgone\b/.test(splashEl.className));
+  // Под контролем app.js тап решает dismissSplash (нечего показать — не скрывает).
+  const ctl = runSplashInlineScript({ withStartup: true });
+  ctl.sandbox.document.readyState = 'complete';
+  ctl.sandbox.yahuSplashControlled = true;
+  let asked = 0;
+  ctl.sandbox.dismissSplash = () => { asked += 1; };
+  ctl.sandbox.yahuSplashTap();
+  assert.strictEqual(asked, 1);
+  assert.ok(!/\bgone\b/.test(ctl.splashEl.className));
+});
+
 test('offlineLabel: время снимка по МСК', () => {
   assert.strictEqual(startup.offlineLabel('2026-10-03T09:05:00.000Z'), 'Нет связи · данные на 12:05');
   assert.strictEqual(startup.offlineLabel('2026-10-02T21:07:00.000Z'), 'Нет связи · данные на 00:07');

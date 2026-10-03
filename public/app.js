@@ -139,6 +139,11 @@ let syncStatus = 'syncing';
 let snapshotSavedAt = null;   // когда сохранён показанный снимок (для «данные на HH:MM»)
 let lastFreshAt = 0;          // время последнего успешного /api/state (для перезапроса при возврате)
 let stateRequest = null;      // текущий запрос /api/state — повторные вызовы к нему присоединяются
+// Номер версии данных: +1 на каждый применённый ответ сервера (/api/state или
+// мутация). По нему ответ /api/state, ушедший до мутации, не затирает её
+// результат, а откат неудачной мутации не возвращает данные старше свежих
+// (решения — Startup.stateResponseAction / mutationFailureAction, см. тесты).
+let serverSeq = 0;
 
 // Копия снимка с цифрами «сегодня», фразой дня и без устаревшей подсказки
 // Б/Ж/У — расчёт в public/startup.js (там же тесты).
@@ -184,26 +189,57 @@ function fetchState() {
 function loadState() {
   if (stateRequest) return stateRequest;
   setSyncStatus('syncing');
+  const requestSeq = serverSeq;
+  let refetch = false;
   stateRequest = fetchState()
     .then((fresh) => {
-      appState = fresh;
+      const action = Startup.stateResponseAction({ requestSeq, currentSeq: serverSeq, status: syncStatus });
+      if (action === 'refetch') { refetch = true; return; }
+      if (action === 'drop') return;
+      applyServerState(fresh);
       wasOverBudget = appState.isOverBudget;
-      lastFreshAt = Date.now();
-      splash.hasFresh = true;
-      splash.failed = false;
-      setSyncStatus('fresh');
-      snapshotSavedAt = new Date().toISOString();
       render();
     })
     .catch(() => {
+      // Пока запрос летел, мутация уже принесла свежие данные — «Нет связи» не ставим.
+      if (syncStatus === 'fresh') return;
       splash.failed = true;
       setSyncStatus('offline');
     })
     .finally(() => {
       stateRequest = null;
-      updateSplash();
+      if (refetch) loadState();
+      else updateSplash();
     });
   return stateRequest;
+}
+
+// Применяет полный ответ сервера (/api/state или мутации): это свежие данные —
+// снимаем «Обновляю…»/«Нет связи» и приглушение, следующий render() обновит снимок.
+function applyServerState(result) {
+  serverSeq += 1;
+  appState = result;
+  lastFreshAt = Date.now();
+  snapshotSavedAt = new Date().toISOString();
+  splash.hasFresh = true;
+  splash.failed = false;
+  setSyncStatus('fresh');
+}
+
+// Для мутаций без оптимистичного обновления (напоминания, правка записи,
+// профиль, фото): ответ без ошибки — свежие данные; с ошибкой — как было раньше.
+function applyMutationResponse(result) {
+  if (result && !result.error) applyServerState(result);
+  else appState = result;
+}
+
+// Мутация не удалась: откат только если с начала действия свежего не было;
+// на экране не подтверждённые данные — «Обновляю…» и перезапрос.
+function handleMutationFailure(prevState, startSeq) {
+  const d = Startup.mutationFailureAction({ startSeq, currentSeq: serverSeq });
+  if (d.restore) appState = prevState;
+  setSyncStatus(d.status);
+  loadState();
 }
 
 // ---------- Заставка со слоганом дня ----------
@@ -279,6 +315,10 @@ function startApp() {
   [Startup.SPLASH_MIN_MS, Startup.SPLASH_MAX_WITH_SNAPSHOT_MS, Startup.SLOW_HINT_MS].forEach((ms) => {
     setTimeout(updateSplash, Math.max(0, ms - elapsedSinceStart()) + 20);
   });
+  // Заставка под контролем app.js — страховка в index.html (скрыть через 7 с
+  // / по любому тапу) больше не вмешивается. Ставится последним: если старт
+  // упал раньше, страховка сработает.
+  window.yahuSplashControlled = true;
 }
 
 // Возврат во вкладку/PWA из фона: если свежим данным больше минуты —
@@ -384,6 +424,7 @@ async function addWaterQuick() {
   // нажатие вообще. Настоящий ответ сервера придёт следом и молча поправит
   // цифры, если они вдруг разошлись (например, сегодняшняя награда).
   const prevState = appState;
+  const startSeq = serverSeq;
   appState = {
     ...appState,
     todayWater: appState.todayWater + 250,
@@ -394,15 +435,15 @@ async function addWaterQuick() {
   try {
     const result = await api.post('/api/water', { amount: 250 });
     if (result.error) throw new Error(result.error);
-    appState = result;
-    renderWater();
+    applyServerState(result);
+    render(); // статус стал «свежо» — снимаем приглушение и обновляем снимок
     refreshAchievements(); // мог засчитаться "Выпита норма воды" — перерисуем, если этот экран сейчас виден
     const left = appState.waterRemaining;
     toast(left > 0 ? `💧 +250 мл, осталось ${left} мл` : '💧 Норма воды выполнена!');
     logAction('Добавлена вода', '+250 мл (быстрое действие)');
   } catch (e) {
-    appState = prevState; // сервер не подтвердил — откатываем оптимистичное обновление
-    renderWater();
+    handleMutationFailure(prevState, startSeq); // сервер не подтвердил — откат (если он не старше свежего) и перезапрос
+    render();
     toast('Не удалось сохранить — проверьте соединение');
   }
 }
@@ -531,6 +572,7 @@ async function deleteFood(id) {
   // сервер (база блюд), но для мгновенной подсказки этого достаточно, а
   // настоящие цифры подтянутся следом.
   const prevState = appState;
+  const startSeq = serverSeq;
   appState = {
     ...appState,
     foods: appState.foods.filter((f) => f.id !== id),
@@ -545,13 +587,13 @@ async function deleteFood(id) {
   try {
     const result = await api.del('/api/foods/' + id);
     if (result.error) throw new Error(result.error);
-    appState = result;
+    applyServerState(result);
     render();
     logAction('Удалена запись еды', `${food.name} · ${food.calories} ккал`);
   } catch (e) {
-    appState = prevState;
+    handleMutationFailure(prevState, startSeq);
+    render();
     toast('Не удалось удалить — обновляю данные…');
-    loadState();
   }
 }
 
@@ -1011,7 +1053,7 @@ function fireReminder(kind) {
 }
 
 async function saveReminders() {
-  appState = await api.post('/api/reminders', appState.reminders);
+  applyMutationResponse(await api.post('/api/reminders', appState.reminders));
   renderReminders();
   refreshAchievements(); // от напоминаний зависит веха "Забота о себе"
 }
@@ -1247,7 +1289,7 @@ async function saveFood(event) {
   const payload = { name, calories, protein, fat, carbs, grams };
 
   if (editingFoodId) {
-    appState = await api.put('/api/foods/' + editingFoodId, payload);
+    applyMutationResponse(await api.put('/api/foods/' + editingFoodId, payload));
     editingFoodId = null;
     document.getElementById('foodDialog').close();
     render();
@@ -1262,6 +1304,7 @@ async function saveFood(event) {
   // (получит правильный id и т.п.), а при ошибке — просто перезапросим
   // актуальное состояние с сервера.
   const prevState = appState;
+  const startSeq = serverSeq;
   const optimisticFood = { id: 'optimistic-' + Date.now(), name, calories, protein, fat, carbs, grams, date: new Date().toISOString() };
   const optimisticCalories = appState.todayCalories + calories;
   appState = {
@@ -1286,13 +1329,13 @@ async function saveFood(event) {
   try {
     const result = await api.post('/api/foods', payload);
     if (result.error) throw new Error(result.error);
-    appState = result;
+    applyServerState(result);
     render();
     logAction('Добавлена еда', `${name} · ${calories} ккал, ${grams} г${wasWater ? ' (учтено как вода)' : ''}`);
   } catch (e) {
-    appState = prevState;
+    handleMutationFailure(prevState, startSeq);
+    render();
     toast('Не удалось сохранить — обновляю данные…');
-    loadState();
   }
 }
 
@@ -1313,6 +1356,7 @@ async function saveWeight(event) {
   // сервера — настоящий ответ подтянется следом (в т.ч. пересчитает
   // "Записан вес" в наградах).
   const prevState = appState;
+  const startSeq = serverSeq;
   appState = { ...appState, lastWeight: kilograms };
   document.getElementById('weightDialog').close();
   render();
@@ -1321,13 +1365,13 @@ async function saveWeight(event) {
   try {
     const result = await api.post('/api/weights', { kilograms });
     if (result.error) throw new Error(result.error);
-    appState = result;
+    applyServerState(result);
     render();
     logAction('Записан вес', `${kilograms} кг`);
   } catch (e) {
-    appState = prevState;
+    handleMutationFailure(prevState, startSeq);
+    render();
     toast('Не удалось сохранить — обновляю данные…');
-    loadState();
   }
 }
 
@@ -1417,7 +1461,7 @@ async function saveProfile(event) {
   };
   const result = await api.post('/api/profile', body);
   if (result.error) { toast(result.error); return; }
-  appState = result;
+  applyServerState(result);
   render();
   toast('Профиль сохранён');
   logAction('Сохранён профиль', `${body.firstName} ${body.lastName}`.trim() || '(без имени)');
@@ -1442,7 +1486,7 @@ function handlePhotoSelect(event) {
     try {
       const result = await api.post('/api/profile/photo', { dataUrl: reader.result });
       if (result.error) { toast(result.error); return; }
-      appState = result;
+      applyServerState(result);
       render();
       toast('Фото обновлено');
       logAction('Загружено фото профиля', file.name);
@@ -1455,7 +1499,7 @@ function handlePhotoSelect(event) {
 }
 
 async function removePhoto() {
-  appState = await api.del('/api/profile/photo');
+  applyMutationResponse(await api.del('/api/profile/photo'));
   render();
   toast('Фото удалено');
   logAction('Удалено фото профиля');

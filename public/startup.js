@@ -125,6 +125,26 @@
     return nowMs - lastSuccessMs > REVISIT_REFRESH_MS;
   }
 
+  // Гонка запросов. Клиент нумерует применённые ответы сервера (serverSeq:
+  // +1 на каждый принятый /api/state и ответ мутации). Ответ /api/state,
+  // запрошенный при меньшем номере, мог уйти на сервер ДО мутации — применять
+  // его нельзя, иначе он затрёт только что добавленную воду/еду.
+  //   'apply'   — с момента запроса ничего не применялось;
+  //   'drop'    — на экране уже более свежий ответ мутации (статус fresh);
+  //   'refetch' — свежего на экране нет (мутация потом не удалась) — перезапросить.
+  function stateResponseAction(input) {
+    if (input.requestSeq === input.currentSeq) return 'apply';
+    return input.status === 'fresh' ? 'drop' : 'refetch';
+  }
+
+  // Мутация не удалась. Откат на состояние до неё допустим, только если с
+  // начала действия не пришло ничего свежего — иначе prevState старше того,
+  // что уже на экране. В любом случае на экране не подтверждённые сервером
+  // данные: статус «Обновляю…» (снимок не перезаписывается) и перезапрос.
+  function mutationFailureAction(input) {
+    return { restore: input.startSeq === input.currentSeq, status: 'syncing' };
+  }
+
   // «Нет связи · данные на HH:MM» — время снимка по МСК (не по часам устройства).
   function offlineLabel(savedAt) {
     if (!savedAt) return 'Нет связи · данные из прошлого сеанса';
@@ -149,6 +169,8 @@
     readSnapshot: readSnapshot,
     shouldRefreshOnVisible: shouldRefreshOnVisible,
     offlineLabel: offlineLabel,
+    stateResponseAction: stateResponseAction,
+    mutationFailureAction: mutationFailureAction,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
